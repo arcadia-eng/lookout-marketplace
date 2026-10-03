@@ -1,0 +1,45 @@
+{
+  "schemaVersion": 1,
+  "listings": [
+    {
+      "id": "lookout-mcp",
+      "kind": "connector",
+      "name": "Lookout MCP",
+      "version": "1.0.0",
+      "description": "Drive Lookout from any MCP host: spawn, steer, monitor and stop real Lookout sessions over Streamable HTTP with OAuth 2.1.",
+      "author": { "name": "Arcadia" },
+      "license": "MIT",
+      "homepage": "https://github.com/tivris/lookout-marketplace/tree/main/servers/lookout-mcp",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/tivris/lookout-marketplace",
+        "directory": "servers/lookout-mcp"
+      },
+      "icon": "https://cdn.jsdelivr.net/gh/tivris/lookout-marketplace@lookout-mcp-v1.0.0/assets/lookout-mcp.svg",
+      "lookout": ">=0.1.0",
+      "publisher": { "name": "Arcadia", "url": "https://github.com/tivris" },
+      "source": {
+        "type": "github",
+        "repo": "tivris/lookout-marketplace",
+        "path": "servers/lookout-mcp",
+        "ref": "lookout-mcp-v1.0.0"
+      },
+      "install": [
+        {
+          "host": "grok",
+          "label": "Grok custom connector (hosted)",
+          "transport": "http",
+          "url": "https://mcp.arcadiausercontent.com/mcp",
+          "auth": { "type": "oauth2-pkce", "scope": "mcp" }
+        },
+        {
+          "host": "generic",
+          "label": "Any MCP client (hosted)",
+          "transport": "http",
+          "url": "https://mcp.arcadiausercontent.com/mcp",
+          "auth": { "type": "oauth2-pkce", "scope": "mcp" }
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,22 @@
+{
+  "name": "lookout-marketplace",
+  "version": "1.0.0",
+  "private": true,
+  "description": "The official Lookout marketplace feed, plus the Lookout MCP server (Streamable HTTP + OAuth 2.1).",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tivris/lookout-marketplace.git"
+  },
+  "homepage": "https://github.com/tivris/lookout-marketplace",
+  "type": "module",
+  "workspaces": ["servers/*"],
+  "scripts": {
+    "validate": "bun scripts/validate-listings.ts",
+    "test": "bun test",
+    "typecheck": "bun run --filter '@arcadia/lookout-mcp' typecheck"
+  },
+  "devDependencies": {
+    "ajv": "^8.17.1"
+  }
+}

@@ -1,0 +1,135 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://raw.githubusercontent.com/tivris/lookout-marketplace/main/listings.schema.json",
+  "title": "Lookout marketplace listings",
+  "description": "The official Lookout marketplace feed. schemaVersion 1 envelope: listings.json is one versioned file the Customize tab fetches and renders as install actions.",
+  "type": "object",
+  "required": ["schemaVersion", "listings"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": { "const": 1 },
+    "listings": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/listing" }
+    }
+  },
+  "$defs": {
+    "httpsUrl": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 2000,
+      "pattern": "^https://[^/\\s]+"
+    },
+    "nonEmptyString": { "type": "string", "minLength": 1, "maxLength": 2000 },
+    "installTarget": {
+      "type": "object",
+      "required": ["host", "label", "transport", "auth"],
+      "additionalProperties": false,
+      "properties": {
+        "host": { "$ref": "#/$defs/nonEmptyString" },
+        "label": { "$ref": "#/$defs/nonEmptyString" },
+        "transport": { "enum": ["http", "stdio"] },
+        "url": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000,
+          "pattern": "^https?://[^/\\s]+"
+        },
+        "command": { "$ref": "#/$defs/nonEmptyString" },
+        "args": { "type": "array", "items": { "type": "string" } },
+        "env": { "type": "array", "items": { "type": "string" } },
+        "auth": { "type": "object" }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "transport": { "const": "http" } } },
+          "then": { "required": ["url"] }
+        },
+        {
+          "if": { "properties": { "transport": { "const": "stdio" } } },
+          "then": { "required": ["command"] }
+        }
+      ]
+    },
+    "listing": {
+      "type": "object",
+      "required": [
+        "id", "kind", "name", "version", "description", "author", "license",
+        "homepage", "repository", "icon", "lookout", "publisher", "source", "install"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9-]+$", "maxLength": 80 },
+        "kind": { "enum": ["connector", "plugin", "skill"] },
+        "name": { "$ref": "#/$defs/nonEmptyString" },
+        "version": { "type": "string", "pattern": "^\\d+\\.\\d+\\.\\d+$" },
+        "description": { "$ref": "#/$defs/nonEmptyString" },
+        "author": {
+          "type": "object",
+          "required": ["name"],
+          "additionalProperties": false,
+          "properties": { "name": { "$ref": "#/$defs/nonEmptyString" } }
+        },
+        "license": { "$ref": "#/$defs/nonEmptyString" },
+        "homepage": { "$ref": "#/$defs/httpsUrl" },
+        "repository": {
+          "type": "object",
+          "required": ["type", "url", "directory"],
+          "additionalProperties": false,
+          "properties": {
+            "type": { "$ref": "#/$defs/nonEmptyString" },
+            "url": { "$ref": "#/$defs/nonEmptyString" },
+            "directory": { "$ref": "#/$defs/nonEmptyString" }
+          }
+        },
+        "icon": { "$ref": "#/$defs/httpsUrl" },
+        "iconDark": { "$ref": "#/$defs/httpsUrl" },
+        "lookout": { "$ref": "#/$defs/nonEmptyString" },
+        "publisher": {
+          "type": "object",
+          "required": ["name", "url"],
+          "additionalProperties": false,
+          "properties": {
+            "name": { "$ref": "#/$defs/nonEmptyString" },
+            "url": { "$ref": "#/$defs/nonEmptyString" },
+            "verified": {
+              "type": "boolean",
+              "description": "RESERVED for v1: absent. The official feed itself is the trust marker; verified activates with third-party feeds."
+            }
+          }
+        },
+        "source": {
+          "oneOf": [
+            {
+              "type": "object",
+              "required": ["type", "repo", "path", "ref"],
+              "additionalProperties": false,
+              "properties": {
+                "type": { "const": "github" },
+                "repo": { "$ref": "#/$defs/nonEmptyString" },
+                "path": { "$ref": "#/$defs/nonEmptyString" },
+                "ref": { "$ref": "#/$defs/nonEmptyString" }
+              }
+            },
+            {
+              "type": "object",
+              "required": ["type", "package", "version"],
+              "additionalProperties": false,
+              "properties": {
+                "type": { "const": "npm" },
+                "package": { "$ref": "#/$defs/nonEmptyString" },
+                "version": { "$ref": "#/$defs/nonEmptyString" }
+              }
+            }
+          ]
+        },
+        "install": {
+          "type": "array",
+          "minItems": 1,
+          "items": { "$ref": "#/$defs/installTarget" }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+node_modules/
+*.tgz
+.DS_Store
+# the quickstart's operator token file: never commit a real credential
+.mcp-token
