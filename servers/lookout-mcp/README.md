@@ -1,14 +1,6 @@
 # Lookout MCP server
 
-Drive [Lookout](https://arcadiausercontent.com) (Arcadia's coding-agent
-harness) from any MCP host: spawn, steer, monitor and stop real Lookout
-sessions as tools. An outer agent (Grok Bot, Claude, any MCP client)
-connects over Streamable HTTP with OAuth 2.1 and works the same threads the
-owner sees live in the Lookout UI.
-
-This is Lookout *as an MCP server* (Lookout exposing sessions). It is a
-separate process, an adapter over Lookout's loopback HTTP API: no engine
-code, no shared state, one Bearer per connection.
+Drive Lookout from any MCP host over Streamable HTTP. The server is a separate process in front of Lookout's loopback API. Sign-in for people is OAuth 2.1. Local use takes a raw operator Bearer.
 
 ## Quickstart (self-hosted, raw Bearer)
 
@@ -161,5 +153,4 @@ vendored canonical-path utility.
 
 ## License
 
-MIT: see [LICENSE](./LICENSE) (shipped beside this README in the package).
-"Lookout" and the Arcadia mark are Arcadia's.
+MIT. See LICENSE.
