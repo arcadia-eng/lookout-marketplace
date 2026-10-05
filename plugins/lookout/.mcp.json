@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "lookout": {
+      "command": "sh",
+      "args": [
+        "${CLAUDE_PLUGIN_ROOT}/scripts/bun.sh",
+        "${CLAUDE_PLUGIN_ROOT}/scripts/mcp.ts"
+      ]
+    }
+  }
+}

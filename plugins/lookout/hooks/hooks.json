@@ -1,0 +1,16 @@
+{
+  "description": "Tell a new Claude Code session when Lookout already has chats running.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/scripts/bun.sh\" \"${CLAUDE_PLUGIN_ROOT}/scripts/session-start.ts\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

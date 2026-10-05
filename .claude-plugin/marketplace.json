@@ -1,0 +1,27 @@
+{
+  "name": "lookout-marketplace",
+  "owner": {
+    "name": "Arcadia",
+    "url": "https://github.com/arcadia-eng"
+  },
+  "metadata": {
+    "description": "Lookout plugins for Claude Code.",
+    "version": "0.1.1"
+  },
+  "plugins": [
+    {
+      "name": "lookout",
+      "source": "./plugins/lookout",
+      "description": "Drive a Lookout account from Claude Code: delegate work onto Lookout models and machines, steer fleets, read quotas, and review a chat's diff.",
+      "version": "0.1.1",
+      "author": {
+        "name": "Arcadia"
+      },
+      "category": "development",
+      "license": "MIT",
+      "homepage": "https://github.com/arcadia-eng/lookout-marketplace",
+      "repository": "https://github.com/arcadia-eng/lookout-marketplace",
+      "keywords": ["lookout", "orchestrator", "subagent", "mcp", "machines"]
+    }
+  ]
+}

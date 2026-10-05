@@ -2,7 +2,7 @@
   "name": "lookout-marketplace",
   "version": "1.0.0",
   "private": true,
-  "description": "The official Lookout marketplace feed, plus the Lookout MCP server (Streamable HTTP + OAuth 2.1).",
+  "description": "The official Lookout marketplace: the Claude Code plugin, the listings feed, and the Lookout MCP server.",
   "license": "MIT",
   "repository": {
     "type": "git",

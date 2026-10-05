@@ -1,6 +1,6 @@
 # Contributing a listing
 
-This repo is an index. A PR adds or updates one listings.json entry. Server work lives under servers/lookout-mcp/ and is a separate PR.
+A PR adds or updates one listings.json entry. Server work lives under servers/lookout-mcp/ and is a separate PR. plugins/lookout/ is published from Lookout's own source, so report plugin problems as issues instead of PRs.
 
 1. Branch from main.
 2. Edit the one entry.
