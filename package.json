@@ -6,9 +6,9 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/tivris/lookout-marketplace.git"
+    "url": "git+https://github.com/arcadia-eng/lookout-marketplace.git"
   },
-  "homepage": "https://github.com/tivris/lookout-marketplace",
+  "homepage": "https://github.com/arcadia-eng/lookout-marketplace",
   "type": "module",
   "workspaces": ["servers/*"],
   "scripts": {

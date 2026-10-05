@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://raw.githubusercontent.com/tivris/lookout-marketplace/main/listings.schema.json",
+  "$id": "https://raw.githubusercontent.com/arcadia-eng/lookout-marketplace/main/listings.schema.json",
   "title": "Lookout marketplace listings",
   "description": "The official Lookout marketplace feed. schemaVersion 1 envelope: listings.json is one versioned file the Customize tab fetches and renders as install actions.",
   "type": "object",

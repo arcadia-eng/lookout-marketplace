@@ -8,7 +8,7 @@ You need a running Lookout desktop app or `lookout` server on the machine
 (the server talks to it over loopback).
 
 ```bash
-git clone https://github.com/tivris/lookout-marketplace.git
+git clone https://github.com/arcadia-eng/lookout-marketplace.git
 cd lookout-marketplace/servers/lookout-mcp
 
 # Operator token: generate once, keep in a private file: this value IS the
