@@ -1,9 +1,10 @@
 #!/usr/bin/env bun
 // Sign this plugin in to the hosted Lookout MCP (OAuth, PKCE, loopback
-// redirect). Tokens land in the plugin data dir or
-// ~/.config/lookout/claude-plugin-oauth.json, mode 0600. They are not
-// printed. The local app does not need this: stdio and the local bridge
-// use the machine's own Lookout.
+// redirect). In Claude Code it runs as /lookout:login, which hands it the
+// plugin data dir (CLAUDE_PLUGIN_DATA is not in the Bash tool's environment);
+// from a terminal the tokens go to ~/.config/lookout/claude-plugin-oauth.json,
+// which the MCP entry reads too. Mode 0600, never printed. The local app does
+// not need this: stdio and the local bridge use the machine's own Lookout.
 
 import { createServer } from "node:http";
 import { randomBytes } from "node:crypto";

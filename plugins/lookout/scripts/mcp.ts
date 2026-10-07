@@ -11,7 +11,7 @@
 import { createInterface } from "node:readline";
 import { findBridge, type Bridge } from "../src/bridge-path.js";
 import { probeApp, probeBridge } from "../src/local.js";
-import { ensureAccess, oauthPath, readOAuthFile, refreshAccess, writeOAuthFile, type StoredOAuth } from "../src/oauth.js";
+import { ensureAccess, findOAuth, oauthPath, refreshAccess, writeOAuthFile, type StoredOAuth } from "../src/oauth.js";
 import { forwardRpc } from "../src/proxy.js";
 import { chooseTarget, LOCAL_APP_URL, LOCAL_BRIDGE_ORIGIN, resolveTarget, type Target } from "../src/target.js";
 import { readBearer } from "../src/token.js";
@@ -48,7 +48,7 @@ function write(message: unknown) {
   process.stdout.write(`${JSON.stringify(message)}\n`);
 }
 
-async function bearerFor(target: Target, stored: StoredOAuth | null): Promise<{ token: string | null; stored: StoredOAuth | null }> {
+async function bearerFor(target: Target, stored: StoredOAuth | null, path: string): Promise<{ token: string | null; stored: StoredOAuth | null }> {
   if (target.mode === "http") {
     const read = readBearer(env);
     if (read.error) console.error(`lookout mcp: ${read.error}`);
@@ -59,7 +59,7 @@ async function bearerFor(target: Target, stored: StoredOAuth | null): Promise<{ 
   try {
     const next = await ensureAccess(stored);
     if (next !== stored && next.accessToken !== stored.accessToken) {
-      try { writeOAuthFile(oauthPath(env), next); } catch { /* the in-memory token still works this process */ }
+      try { writeOAuthFile(path, next); } catch { /* the in-memory token still works this process */ }
     }
     return { token: next.accessToken ?? null, stored: next };
   } catch (e) {
@@ -71,8 +71,11 @@ async function bearerFor(target: Target, stored: StoredOAuth | null): Promise<{ 
 async function proxy(target: Extract<Target, { mode: "http" | "remote" }>) {
   const where = target.mode === "http" ? target.mcpUrl : target.mcpUrl;
   console.error(`lookout mcp: ${target.mode} → ${where}`);
-  let stored = target.mode === "remote" ? readOAuthFile(oauthPath(env)) : null;
-  let auth = await bearerFor(target, stored);
+  // the sign-in and the file it came from: Claude's plugin data dir (/lookout:login), else the shared config file
+  const found = target.mode === "remote" ? findOAuth(env) : null;
+  let path = found?.path ?? oauthPath(env);
+  let stored = found?.stored ?? null;
+  let auth = await bearerFor(target, stored, path);
   stored = auth.stored;
   let sessionId: string | null = null;
   const rl = createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -91,10 +94,17 @@ async function proxy(target: Extract<Target, { mode: "http" | "remote" }>) {
       if (isRequest) write(result.response);
       continue;
     }
-    if (result.status === 401 && target.mode === "remote" && stored?.refreshToken) {
+    // a sign-in saved since this process started (/lookout:login) is taken up here, no restart needed
+    const signedIn = result.status === 401 && target.mode === "remote" ? findOAuth(env) : null;
+    if (signedIn && signedIn.stored.accessToken !== stored?.accessToken) {
+      path = signedIn.path;
+      auth = await bearerFor(target, signedIn.stored, path);
+      stored = auth.stored;
+      result = await forwardRpc(message, { mcpUrl: target.mcpUrl, token: auth.token, sessionId });
+    } else if (result.status === 401 && target.mode === "remote" && stored?.refreshToken) {
       try {
         stored = await refreshAccess(stored);
-        writeOAuthFile(oauthPath(env), stored);
+        writeOAuthFile(path, stored);
         auth = { token: stored.accessToken ?? null, stored };
         result = await forwardRpc(message, { mcpUrl: target.mcpUrl, token: auth.token, sessionId });
       } catch (e) {

@@ -44,6 +44,26 @@ export function readOAuthFile(path: string): StoredOAuth | null {
   try { return loadOAuth(readFileSync(path, "utf8")); } catch { return null; }
 }
 
+/**
+ * Where a sign-in may be saved, in the order the MCP entry reads them: an explicit file alone; else Claude's plugin
+ * data dir (what /lookout:login writes), then the config file a sign-in run outside Claude Code writes.
+ */
+export function oauthPaths(env: Record<string, string | undefined>, home = homedir()): string[] {
+  const first = oauthPath(env, home);
+  if (env.LOOKOUT_MCP_OAUTH_FILE?.trim()) return [first];
+  const shared = oauthPath({ ...env, CLAUDE_PLUGIN_DATA: undefined }, home);
+  return first === shared ? [first] : [first, shared];
+}
+
+/** The first saved sign-in, with the file it came from (a refreshed token goes back there). */
+export function findOAuth(env: Record<string, string | undefined>, home = homedir()): { path: string; stored: StoredOAuth } | null {
+  for (const path of oauthPaths(env, home)) {
+    const stored = readOAuthFile(path);
+    if (stored) return { path, stored };
+  }
+  return null;
+}
+
 /** Mode 0600, temp-then-rename. Callers pass a path they are allowed to own. */
 export function writeOAuthFile(path: string, stored: StoredOAuth): void {
   mkdirSync(dirname(path), { recursive: true, mode: 0o700 });

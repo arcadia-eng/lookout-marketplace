@@ -38,7 +38,7 @@ export function parseMcpBody(contentType: string, text: string): unknown | null 
 
 export function signInMessage(remote: boolean): string {
   return remote
-    ? "Lookout remote MCP refused the call. Run scripts/login.ts in this plugin (bun scripts/login.ts) and retry. No token was printed."
+    ? "Lookout's hosted MCP needs a sign-in: run /lookout:login, then call again (if the lookout server shows as failed, reconnect it in /mcp). No token was printed."
     : "The local Lookout bridge refused the bearer. Set LOOKOUT_MCP_TOKEN, or check the token file. The token was not printed.";
 }
 

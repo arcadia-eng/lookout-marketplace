@@ -10,7 +10,7 @@
 export const LOCAL_APP_URL = "http://127.0.0.1:8789";
 export const LOCAL_BRIDGE_ORIGIN = "http://127.0.0.1:8792";
 export const LOCAL_BRIDGE_MCP = `${LOCAL_BRIDGE_ORIGIN}/mcp`;
-export const REMOTE_MCP_URL = "https://mcp.arcadiausercontent.com/mcp";
+export const REMOTE_MCP_URL = "https://mcp.lookout.itoowasinarcadia.com/mcp";
 
 export interface Probe {
   /** GET /api/health on the local app answered. */

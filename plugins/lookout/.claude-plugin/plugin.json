@@ -1,13 +1,13 @@
 {
   "name": "lookout",
   "displayName": "Lookout",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "description": "Drive a Lookout account from Claude Code: delegate work onto Lookout models and machines, steer fleets, read quotas, and review a chat's diff. Uses the local app when it is up, otherwise the hosted MCP with OAuth.",
   "author": {
     "name": "Arcadia",
     "url": "https://github.com/arcadia-eng"
   },
-  "homepage": "https://github.com/arcadia-eng/lookout-marketplace",
+  "homepage": "https://lookout.itoowasinarcadia.com/docs/other-apps",
   "repository": "https://github.com/arcadia-eng/lookout-marketplace",
   "license": "MIT",
   "keywords": ["lookout", "orchestrator", "subagent", "mcp", "machines"]
