@@ -53,7 +53,7 @@ The watcher needs the local app. On the hosted MCP with no local app, use the wo
 
 ## Load and caps
 
-Delegated turns wait (state `queued`, `held.reason`) while a machine is loaded: load average above 1.5 per core, or under 3 GB available memory (a quarter of a smaller machine's), or at a cap. They start on their own; never retry a queued chat. The user's own sends in the app are never held. Caps: `lookout_configure_machine` per machine (`perClient`, default 6; `perProject`, default 4; `loadPerCore`, `memAvailableMinMb`), or `lookout_configure_project {projectId, admission: {perClient, perProject}}` for one project.
+No machine caps or holds delegated turns by default: they start at once however loaded the machine is. A turn waits (state `queued`, `held.reason` and `held.limit` name the limit) only behind a limit the user set: a cap or load hold on its machine (`lookout_configure_machine`: `perMachine`, `perClient`, `perProject`, `loadPerCore`, `memAvailableMinMb`, `memoryPressureLevel`, all 0 until set), a project's own cap (`lookout_configure_project {projectId, admission: {perClient, perProject}}`), or a drain. It starts on its own; never retry a queued chat. Set a limit only when the user asks for one. The user's own sends in the app are never held.
 
 Project folders: `lookout_configure_project {projectId, folders: [primary, ...extra]}` is the full ordered list; the first is the chat cwd and cannot move, the rest are added, removed or reordered.
 

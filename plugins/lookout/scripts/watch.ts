@@ -8,7 +8,7 @@
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { CLIENT_HEADER, localGet } from "../src/local.js";
+import { CLIENT_HEADER, localGet, sessionHeaders } from "../src/local.js";
 import { deadlineLine, takeSseEvents, unseen, WATCH_MAX_MS, watchLine, type LaneSnap } from "../src/watch.js";
 
 function flag(argv: readonly string[], name: string): string | null {
@@ -75,7 +75,7 @@ const ctrl = new AbortController();
 const timer = setTimeout(() => ctrl.abort(), Math.max(0, deadline - Date.now()));
 try {
   const res = await fetch(`${base}/api/threads/${encodeURIComponent(threadId)}/stream`, {
-    headers: { [CLIENT_HEADER]: "mcp", accept: "text/event-stream" },
+    headers: { [CLIENT_HEADER]: "mcp", accept: "text/event-stream", ...sessionHeaders(base) },
     signal: ctrl.signal,
   });
   if (!res.ok || !res.body) {

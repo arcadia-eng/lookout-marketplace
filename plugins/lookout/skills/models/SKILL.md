@@ -5,7 +5,7 @@ description: Pick a Lookout model from provider quotas. Use when the user wants 
 
 # Pick a model by quota
 
-The canonical document is `GET /api/providers` on the local Lookout app (`http://127.0.0.1:8789/api/providers`, or `LOOKOUT_URL`). One shape for every provider: `connection`, `plan`, `meters` (`leftPercent`, `exhausted`, `resetsAt`), `metered`, `accounts`. No tokens, no keys.
+The canonical document is `GET /api/providers` on the local Lookout app (`http://127.0.0.1:8789/api/providers`, or `LOOKOUT_URL`), with the header `x-lookout-session: <the contents of ~/.lookout/app-session.key>` (the app answers no request without it). One shape for every provider: `connection`, `plan`, `meters` (`leftPercent`, `exhausted`, `resetsAt`), `metered`, `accounts`. No tokens, no keys.
 
 - `?refresh=none` reads the local snapshot and does not dial the providers.
 - The default re-reads what is stale.
