@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Lookout plugins for Claude Code.",
-    "version": "0.1.3"
+    "version": "0.1.4"
   },
   "plugins": [
     {
       "name": "lookout",
       "source": "./plugins/lookout",
       "description": "Drive a Lookout account from Claude Code: delegate work onto Lookout models and machines, steer fleets, read quotas, and review a chat's diff.",
-      "version": "0.1.3",
+      "version": "0.1.4",
       "author": {
         "name": "Arcadia"
       },

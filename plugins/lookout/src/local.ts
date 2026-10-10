@@ -9,6 +9,19 @@ import { join } from "node:path";
 export const CLIENT_HEADER = "x-lookout-client";
 /** The header the app's server admits a local client by (principal.ts SESSION_HEADER). */
 export const SESSION_HEADER = "x-lookout-session";
+/**
+ * The header a long poll states its hold with (src/network/protocol.ts HOLD_HEADER). A relayed wait without it is cut
+ * at the relay's short call timeout, so any request that waits sends it.
+ */
+export const HOLD_HEADER = "lookout-hold";
+
+/**
+ * A machine of this account, as this server's relay reaches it (src/network/routes.ts, the same surface
+ * src/mcp/client.ts forMachine uses): its whole API answers under /api/network/machines/<ref>, name or id.
+ */
+export function machineBase(base: string, ref: string): string {
+  return `${base.replace(/\/$/, "")}/api/network/machines/${encodeURIComponent(ref)}`;
+}
 
 const LOOPBACK = new Set(["127.0.0.1", "localhost", "[::1]", "::1"]);
 
