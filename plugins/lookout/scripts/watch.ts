@@ -19,12 +19,15 @@ import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { CLIENT_HEADER, HOLD_HEADER, localGet, machineBase, sessionHeaders } from "../src/local.js";
 import {
-  deadlineLine, fleetDeadline, fleetStep, fleetSummary, runDeadline, runStep, rowOpen, rowWaitsForPlan, takeSseEvents, unseen,
+  deadlineLine, decodeFleetCursor, fleetDeadline, fleetGone, fleetPageSettled, fleetStep, fleetSummary, fleetSummaryRows,
+  offPageAnswers, offPageLines, offPageMarks, offPageNeedsDetail, runDeadline, runStep, rowWaitsForPlan, takeSseEvents, unseen,
   WATCH_MAX_MS, watchLine, type FleetRow, type LaneSnap, type RunSnap,
 } from "../src/watch.js";
 
 /** The server's longest hold for a lanes or run wait. */
 const WAIT_S = 55;
+/** Omitted chats re-read by id in one round (a question, a quota wall, a crash resume). The rest stay unresolved. */
+const DETAIL_CAP = 400;
 
 function flag(argv: readonly string[], name: string): string | null {
   const at = argv.indexOf(name);
@@ -114,7 +117,7 @@ async function read(api: string, path: string, o: { ms?: number; waitS?: number;
 const why = (o: Read) => (o.ok ? "" : o.status ? `HTTP ${o.status}` : "unreachable");
 
 /** A lanes answer into the rows the fleet step takes. */
-function fleetRowsOf(body: unknown): { rows: FleetRow[]; cursor?: string; complete: boolean } | null {
+function fleetRowsOf(body: unknown): { rows: FleetRow[]; cursor?: string; total: number | null; complete: boolean } | null {
   if (!body || typeof body !== "object") return null;
   const lanes = (body as { lanes?: unknown }).lanes;
   if (!Array.isArray(lanes)) return null;
@@ -142,10 +145,13 @@ function fleetRowsOf(body: unknown): { rows: FleetRow[]; cursor?: string; comple
     });
   }
   const b = body as { cursor?: unknown; total?: unknown };
+  const total = typeof b.total === "number" ? b.total : null;
   return {
     rows,
     ...(typeof b.cursor === "string" ? { cursor: b.cursor } : {}),
-    complete: typeof b.total !== "number" || b.total <= rows.length,
+    total,
+    // no `total` is not proof the page is everyone: a cut that forgot the count must not read as settled
+    complete: total !== null && total <= rows.length,
   };
 }
 
@@ -306,25 +312,88 @@ async function watchFleet(): Promise<never> {
     marks: new Map(Object.entries(state.marks[t.label] ?? {})),
     cursor: state.cursors[t.label] as string | undefined,
     rows: [] as FleetRow[],
+    /** The server's page was the whole matched set. */
+    pageComplete: true,
+    /** Chats the page omitted, when the cursor named them and this round did not read their lanes. */
+    off: null as Map<string, string> | null,
     answering: true,
   }));
-  const step = (r: (typeof rt)[number], body: unknown) => {
+  // GET /api/lanes pages at 200 (working first, then newest). The cursor still names every matched chat.
+  // A batch is not settled on the page alone: an older queued chat, a workflow ask, a plan wait, or a crash
+  // resume past the cut would otherwise read as done and the lead would move on.
+  const hydrate = async (api: string, parsed: { rows: FleetRow[]; cursor?: string; total: number | null; complete: boolean }) => {
+    if (parsed.complete) return { rows: parsed.rows, off: null as Map<string, string> | null, cursor: null as Map<string, string> | null };
+    const cursor = parsed.cursor ? decodeFleetCursor(parsed.cursor) : null;
+    const off0 = offPageMarks(parsed.rows, cursor);
+    // a cursor shorter than `total` is not the matched set; the omitted chats cannot be judged from it
+    if (!off0 || !cursor || (parsed.total !== null && cursor.size < parsed.total))
+      return { rows: parsed.rows, off: null, cursor: null };
+    const need = offPageNeedsDetail(off0);
+    const rank = (id: string) => {
+      const mark = off0.get(id) ?? "";
+      const state = mark.split(/[+~]/)[0] ?? mark;
+      return state === "needs_input" || mark.includes("+asking") || state === "quota" ? 0 : 1;
+    };
+    const ids = [...need].sort((a, b) => rank(a) - rank(b)).slice(0, DETAIL_CAP);
+    const extra: FleetRow[] = [];
+    for (let i = 0; i < ids.length; i += 80) {
+      const q = new URLSearchParams({ limit: "200", ids: ids.slice(i, i + 80).join(",") });
+      if (lanePrefix !== null) q.set("lanePrefix", lanePrefix);
+      const got = await read(api, `/api/lanes?${q}`, { ms: 8000 });
+      const page = got.ok ? fleetRowsOf(got.body) : null;
+      if (!page) return { rows: [...parsed.rows, ...extra], off: offPageMarks([...parsed.rows, ...extra], cursor), cursor };
+      extra.push(...page.rows);
+    }
+    const rows = [...parsed.rows, ...extra];
+    return { rows, off: offPageMarks(rows, cursor), cursor };
+  };
+  const step = async (r: (typeof rt)[number], body: unknown) => {
     const parsed = fleetRowsOf(body);
     if (!parsed) return null;
+    const hydrated = await hydrate(r.t.api, parsed);
+    const machine = r.t.here ? undefined : r.t.label;
+    const before = r.marks;
+    const out = fleetStep(hydrated.rows, before, { machine, complete: parsed.complete });
+    const answerExtra = hydrated.off ? offPageAnswers(before, hydrated.off, machine) : [];
+    const lines = [
+      ...out.lines,
+      ...(hydrated.off ? offPageLines(before, hydrated.off, machine) : []),
+      ...answerExtra,
+      ...(hydrated.cursor ? fleetGone(before, hydrated.rows, hydrated.cursor, machine) : []),
+    ];
+    r.marks = new Map(out.marks);
+    if (hydrated.off && hydrated.cursor) {
+      for (const [id, mark] of hydrated.off) {
+        const state = mark.split(/[+~]/)[0] ?? mark;
+        // the cursor's `interrupted` does not say whether a resume is still pending; keep a mark the detail
+        // read already made, and don't record the bare one or the next detail read would stay silent
+        if (state === "interrupted") {
+          const prev = before.get(id);
+          if (prev?.startsWith("interrupted~")) r.marks.set(id, prev);
+          continue;
+        }
+        r.marks.set(id, mark);
+      }
+      const seen = new Set([...hydrated.rows.map(x => x.threadId), ...hydrated.cursor.keys()]);
+      for (const id of [...r.marks.keys()]) if (!seen.has(id)) r.marks.delete(id);
+    }
     r.cursor = parsed.cursor ?? r.cursor;
-    const out = fleetStep(parsed.rows, r.marks, { machine: r.t.here ? undefined : r.t.label, complete: parsed.complete });
-    r.marks = out.marks;
-    r.rows = parsed.rows;
+    r.rows = hydrated.rows;
+    r.pageComplete = parsed.complete;
+    r.off = hydrated.off;
     state.cursors[r.t.label] = r.cursor ?? "";
-    state.marks[r.t.label] = Object.fromEntries(out.marks);
+    state.marks[r.t.label] = Object.fromEntries(r.marks);
     savePersisted(cursorPath, state);
-    return out;
+    return { lines, answers: out.answers + answerExtra.length };
   };
   let first = true;
   for (;;) {
     const leftMs = deadline - Date.now();
     if (leftMs <= 0) {
-      emit(fleetDeadline(rt.flatMap(r => r.rows)));
+      const more = rt.flatMap(r => [...(r.off?.values() ?? [])]);
+      if (rt.some(r => r.answering && !r.pageComplete && r.off === null))
+        emit("[lookout] part of the fleet was cut off this read and could not be judged.");
+      emit(fleetDeadline(rt.flatMap(r => r.rows), more));
       process.exit(0);
     }
     const waitS = first ? 0 : Math.max(1, Math.min(WAIT_S, Math.ceil(leftMs / 1000)));
@@ -353,7 +422,7 @@ async function watchFleet(): Promise<never> {
         }
         continue;
       }
-      const out = step(r, o.body);
+      const out = await step(r, o.body);
       if (!out) {
         r.answering = false;
         emit(`[lookout] ${name} answered nothing readable, not watched this round`);
@@ -370,12 +439,15 @@ async function watchFleet(): Promise<never> {
       emit("[lookout] fleet could not be watched (no machine answered).");
       process.exit(0);
     }
-    if (rt.every(r => r.answering && r.rows.length === 0)) {
+    if (rt.every(r => r.answering && r.rows.length === 0 && r.pageComplete)) {
       emit(`[lookout] fleet: no chats to watch${lanePrefix !== null ? ` under lane prefix ${lanePrefix}` : ""}.`);
       process.exit(0);
     }
-    if (rt.every(r => r.answering && r.rows.every(row => !rowOpen(row)))) {
-      emit(fleetSummary(rt.flatMap(r => r.rows), rt.filter(r => r.answering).length));
+    // a cut page of settled rows is not the batch: omitted queued, new, asking, parked, or interrupted chats still count.
+    // fleetPageSettled stays false while any row waits for its plan, so a plan wait never exits.
+    if (rt.every(r => r.answering && fleetPageSettled(r.rows, r.pageComplete, r.off) && !r.rows.some(rowWaitsForPlan))) {
+      const machines = rt.filter(r => r.answering).length;
+      emit(fleetSummary(rt.flatMap(r => fleetSummaryRows(r.rows, r.pageComplete ? null : r.off)), machines));
       process.exit(0);
     }
     if (first) first = false;

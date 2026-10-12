@@ -4,7 +4,8 @@
 // snapshot plus the marks of the previous read into the lines a batch
 // watcher prints: one per settle, needs_input, quota wall (with the reset)
 // or workflow ask, never the same event twice across a cursor. A chat that
-// waits out its plan (state parked) gets one line and stays watched.
+// waits out its plan (state parked) gets one line and stays watched. A page
+// cut at the lanes limit is not the batch: omitted chats still count.
 
 export interface SseEvent { data: string }
 
@@ -190,12 +191,140 @@ export function fleetSummary(rows: FleetRow[], machines = 1): string {
   return `[lookout] fleet settled${where}: ${parts.join(", ")}`;
 }
 
-/** The re-arm line at the deadline: what is still going, so the lead knows what it re-arms for. */
-export function fleetDeadline(rows: FleetRow[]): string {
+const markState = (mark: string): string => mark.split(/[+~]/)[0] ?? mark;
+
+/** The re-arm line at the deadline: what is still going, so the lead knows what it re-arms for.
+ *  `moreMarks` are chats a cut page omitted (the lanes cursor's marks): a queued, asking, or parked
+ *  chat past the limit is still the batch's, and the line names it. A plan wait never drops off this line. */
+export function fleetDeadline(rows: FleetRow[], moreMarks?: Iterable<string>): string {
   const counts = new Map<string, number>();
-  for (const r of rows) if (rowOpen(r)) counts.set(r.state, (counts.get(r.state) ?? 0) + 1);
+  const add = (state: string) => counts.set(state, (counts.get(state) ?? 0) + 1);
+  for (const r of rows) if (rowOpen(r) || rowWaitsForPlan(r)) add(r.state);
+  if (moreMarks) for (const mark of moreMarks) {
+    const state = markState(mark);
+    if (mark.includes("+asking")) add("asking");
+    else if (state === "parked" || state === "interrupted" || markOpen(mark)) add(state);
+  }
   const parts = [...counts.entries()].map(([s, n]) => `${n} ${s}`).join(", ");
   return `[lookout] fleet still working${parts ? ` (${parts})` : ""}. Arm the watcher again.`;
+}
+
+/**
+ * The lanes cursor (src/server/lane-cursor.ts): every chat the read matched, not the page `limit` cut it to.
+ * Null when the string is not one of those cursors.
+ */
+export function decodeFleetCursor(cursor: string): Map<string, string> | null {
+  try {
+    const v: unknown = JSON.parse(Buffer.from(cursor, "base64url").toString("utf8"));
+    if (!Array.isArray(v)) return null;
+    const out = new Map<string, string>();
+    for (const p of v) {
+      if (!Array.isArray(p) || typeof p[0] !== "string" || typeof p[1] !== "string") return null;
+      out.set(p[0], p[1]);
+    }
+    return out;
+  } catch { return null; }
+}
+
+/**
+ * Chats the cursor names that this page did not. Null when the cursor is missing or does not cover the page
+ * (it is not this read's matched set, so a chat absent from the page cannot be judged from it).
+ */
+export function offPageMarks(rows: FleetRow[], cursor: Map<string, string> | null): Map<string, string> | null {
+  if (!cursor) return null;
+  for (const r of rows) if (!cursor.has(r.threadId)) return null;
+  const seen = new Set(rows.map(r => r.threadId));
+  const off = new Map<string, string>();
+  for (const [id, mark] of cursor) if (!seen.has(id)) off.set(id, mark);
+  return off;
+}
+
+/**
+ * Omitted chats whose lane the cursor cannot finish: a question or a workflow ask (the lead has to answer),
+ * a quota wall (the line names when it resets), or `interrupted` (a pending crash resume stays open, and
+ * the cursor's mark does not say which). The watcher reads those lanes by id.
+ */
+export function offPageNeedsDetail(off: Map<string, string>): string[] {
+  const ids: string[] = [];
+  for (const [id, mark] of off) {
+    const state = markState(mark);
+    if (state === "needs_input" || state === "interrupted" || state === "quota" || mark.includes("+asking")) ids.push(id);
+  }
+  return ids;
+}
+
+/**
+ * Whether this read may end the batch. A complete page is settled when every row is. A cut page is settled
+ * only when every omitted mark is a state the cursor describes completely (`done`, `failed`, …). An omitted
+ * `interrupted` is not: the resume mark is not in the cursor, and one pending resume is still the batch's.
+ * `off` null on a cut page means the rest could not be read. A plan wait (`parked`) is open, on the page
+ * and in an omitted mark, so it never ends the batch.
+ */
+export function fleetPageSettled(rows: FleetRow[], complete: boolean, off: Map<string, string> | null): boolean {
+  if (rows.some(row => rowWaitsForPlan(row) || rowOpen(row))) return false;
+  if (complete) return true;
+  if (!off) return false;
+  for (const mark of off.values()) {
+    const state = markState(mark);
+    if (state === "parked" || state === "interrupted" || mark.includes("+asking") || markOpen(mark)) return false;
+  }
+  return true;
+}
+
+/** Rows the settled line counts: the page, plus omitted chats whose state the cursor already settled. */
+export function fleetSummaryRows(rows: FleetRow[], off?: Map<string, string> | null): FleetRow[] {
+  if (!off?.size) return rows;
+  const extra: FleetRow[] = [];
+  for (const [threadId, mark] of off) extra.push({ threadId, state: markState(mark), live: false, working: false });
+  return [...rows, ...extra];
+}
+
+const atId = (id: string, machine?: string) => `${machine ? `${machine}: ` : ""}${id} (${id})`;
+
+/**
+ * A settle the page cut off. The cursor has the state and not the reply; the line still names the chat, once.
+ * A question, a workflow ask and `interrupted` are not here: those lanes are read whole.
+ */
+export function offPageLines(before: Map<string, string>, off: Map<string, string>, machine?: string): string[] {
+  const lines: string[] = [];
+  for (const [id, mark] of off) {
+    if (before.get(id) === mark) continue;
+    const state = markState(mark);
+    if (!state || state === "interrupted" || state === "parked" || markOpen(mark)) continue;
+    lines.push(`[lookout] ${atId(id, machine)} ${state}`);
+  }
+  return lines;
+}
+
+/**
+ * A person is waiting on a chat the page cut off and the detail read did not return. The watcher exits on it,
+ * the same as a question on the page; the line has no question text because the cursor does not carry one.
+ */
+export function offPageAnswers(before: Map<string, string>, off: Map<string, string>, machine?: string): string[] {
+  const lines: string[] = [];
+  for (const [id, mark] of off) {
+    if (before.get(id) === mark) continue;
+    const state = markState(mark);
+    if (state === "needs_input") lines.push(`[lookout] ${atId(id, machine)} needs input`);
+    else if (mark.includes("+asking")) lines.push(`[lookout] ${atId(id, machine)} workflow asks`);
+  }
+  return lines;
+}
+
+/**
+ * A chat the previous read was still waiting on, now in neither the page nor the cursor: archived or deleted.
+ * One that had already settled is not named; its line already went out. `cursor` is this read's matched set.
+ */
+export function fleetGone(before: Map<string, string>, rows: FleetRow[], cursor: Map<string, string>, machine?: string): string[] {
+  const scope = machine ? `${machine}: ` : "";
+  const seen = new Set(rows.map(r => r.threadId));
+  for (const id of cursor.keys()) seen.add(id);
+  const lines: string[] = [];
+  for (const [id, mark] of before) {
+    if (seen.has(id) || !markOpen(mark)) continue;
+    lines.push(`[lookout] ${scope}${id} left the fleet (archived or deleted)`);
+  }
+  return lines;
 }
 
 /** A workflow run as the watcher keeps it (scripts/watch.ts narrows the server's JSON). */
