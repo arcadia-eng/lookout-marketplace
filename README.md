@@ -1,6 +1,6 @@
 # Lookout Marketplace
 
-Lookout is a coding agent harness that runs on your own model subscriptions. This repo is its official marketplace: the Lookout plugin for Claude Code, the listings feed the Lookout app reads, and the Lookout MCP server.
+Lookout is a coding agent harness that runs on your own model subscriptions. This repo is its official marketplace: the Lookout plugin for Claude Code, the listings feed the Lookout app reads, Lookout's connectors, and the Lookout MCP server.
 
 ## Claude Code plugin
 
@@ -48,7 +48,17 @@ The plugin connects whether or not Lookout is running; calls succeed once the ap
 
 ## Listings feed
 
-`listings.json` is the catalog the Lookout app's Customize tab reads. Each entry points at a listing's source. `listings.schema.json` and `scripts/validate-listings.ts` gate it.
+`listings.json` is the catalog the Lookout app reads. Each entry points at a listing's source. `listings.schema.json` and `scripts/validate-listings.ts` gate it.
+
+An install target whose host is `lookout` is a connector Lookout adds itself. It is remote and https only, and its `auth` names a sign-in policy built into Lookout, never a client. `audience`, when present, limits who sees an entry: one sha256 hex digest of `lookout-audience/1:<account user id>` per Lookout account.
+
+## Connectors
+
+| Connector | Server | Availability |
+|---|---|---|
+| [Gmail](connectors/gmail/) | Google's hosted Gmail MCP server | Preview |
+
+Each lives in `connectors/<id>/` as `plugin.json` and `mcp.json`, tagged `<id>-vX.Y.Z`.
 
 ## Lookout MCP server
 
@@ -62,12 +72,13 @@ The plugin connects whether or not Lookout is running; calls succeed once the ap
 | `plugins/lookout/` | Lookout plugin for Claude Code |
 | `listings.json` | Lookout listings feed |
 | `listings.schema.json`, `scripts/` | Feed schema and validator |
+| `connectors/` | Connectors Lookout adds |
 | `servers/lookout-mcp/` | Lookout MCP server |
 | `assets/` | Icons, pinned per tag |
 
 ## Versions
 
-The plugin's version lives in `plugins/lookout/.claude-plugin/plugin.json` and its marketplace entry, and is tagged `vX.Y.Z`. The server's version lives in `servers/lookout-mcp/package.json` and is tagged `lookout-mcp-vX.Y.Z`. CI rejects drift.
+The plugin's version lives in `plugins/lookout/.claude-plugin/plugin.json` and its marketplace entry, and is tagged `vX.Y.Z`. The server's version lives in `servers/lookout-mcp/package.json` and is tagged `lookout-mcp-vX.Y.Z`. A connector's lives in its `plugin.json` and is tagged `<id>-vX.Y.Z`. CI rejects drift.
 
 ## Development
 
@@ -89,4 +100,4 @@ See [SECURITY.md](SECURITY.md). Report vulnerabilities privately, not in a publi
 
 ## License
 
-MIT. See [LICENSE](LICENSE). Lookout and the Arcadia mark are Arcadia's.
+MIT. See [LICENSE](LICENSE). Lookout and the Arcadia mark are Arcadia's. Gmail and its logo are Google's.

@@ -29,15 +29,54 @@
           "host": "grok",
           "label": "Grok custom connector (hosted)",
           "transport": "http",
-          "url": "https://mcp.arcadiausercontent.com/mcp",
+          "url": "https://mcp.lookout.itoowasinarcadia.com/mcp",
           "auth": { "type": "oauth2-pkce", "scope": "mcp" }
         },
         {
           "host": "generic",
           "label": "Any MCP client (hosted)",
           "transport": "http",
-          "url": "https://mcp.arcadiausercontent.com/mcp",
+          "url": "https://mcp.lookout.itoowasinarcadia.com/mcp",
           "auth": { "type": "oauth2-pkce", "scope": "mcp" }
+        }
+      ]
+    },
+    {
+      "id": "gmail",
+      "kind": "connector",
+      "name": "Gmail",
+      "version": "1.0.0",
+      "description": "Search, read, draft and organize your mail.",
+      "author": { "name": "Arcadia" },
+      "license": "MIT",
+      "homepage": "https://github.com/arcadia-eng/lookout-marketplace/tree/main/connectors/gmail",
+      "repository": {
+        "type": "git",
+        "url": "https://github.com/arcadia-eng/lookout-marketplace",
+        "directory": "connectors/gmail"
+      },
+      "icon": "https://cdn.jsdelivr.net/gh/arcadia-eng/lookout-marketplace@gmail-v1.0.0/assets/gmail.svg",
+      "lookout": ">=0.2.0",
+      "publisher": { "name": "Arcadia", "url": "https://github.com/arcadia-eng" },
+      "source": {
+        "type": "github",
+        "repo": "arcadia-eng/lookout-marketplace",
+        "path": "connectors/gmail",
+        "ref": "gmail-v1.0.0"
+      },
+      "availability": "preview",
+      "audience": ["aecb8b4ad433e6c1bf263d9a152e912135aa8c91af22442cdd120e5d4cc700b3"],
+      "capabilities": { "can": ["Read", "Draft", "Organize"], "cannot": ["Send"] },
+      "untrusted": true,
+      "limitedUse": true,
+      "sensitiveTools": ["send_*", "forward_*"],
+      "install": [
+        {
+          "host": "lookout",
+          "label": "Google's hosted Gmail MCP server",
+          "transport": "http",
+          "url": "https://gmailmcp.googleapis.com/mcp/v1",
+          "auth": { "type": "oauth", "policy": "gmailmcp" }
         }
       ]
     }

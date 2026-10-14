@@ -1,0 +1,15 @@
+{
+  "name": "gmail",
+  "displayName": "Gmail",
+  "version": "1.0.0",
+  "description": "Search, read, draft and organize your mail.",
+  "author": {
+    "name": "Arcadia",
+    "url": "https://github.com/arcadia-eng"
+  },
+  "homepage": "https://github.com/arcadia-eng/lookout-marketplace/tree/main/connectors/gmail",
+  "repository": "https://github.com/arcadia-eng/lookout-marketplace",
+  "license": "MIT",
+  "keywords": ["gmail", "google", "mail", "mcp"],
+  "mcpServers": "./mcp.json"
+}

@@ -10,9 +10,9 @@ A PR adds or updates one listings.json entry. Server work lives under servers/lo
 6. Open the PR.
 
 - unique kebab-case id
-- version matches the package and the tag
+- version matches the package, or the connector's plugin.json, and the tag
 - validator green
 - icon pinned to a tag
-- no secrets
+- no secrets, and no OAuth client: a connector names a policy Lookout builds in
 
 See SECURITY.md.

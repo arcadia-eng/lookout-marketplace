@@ -1,8 +1,9 @@
 // The feed gate as a test: listings.json validates against the schema,
-// ids are unique, the lookout-mcp listing tracks the package version, and
-// the schema/validator reject the shapes a pattern alone would miss:
-// transport without its required field, bare `https://`, non-https icons,
-// unknown enums.
+// ids are unique, the lookout-mcp listing tracks the package version, a
+// connector tracks its folder, and the schema/validator reject the shapes a
+// pattern alone would miss: transport without its required field, bare
+// `https://`, non-https icons, unknown enums, a lookout target that could
+// run a command or choose its own client.
 import { describe, expect, test } from "bun:test";
 import { readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
@@ -13,10 +14,10 @@ const root = dirname(fileURLToPath(import.meta.url));
 const feed = JSON.parse(readFileSync(join(root, "listings.json"), "utf8"));
 const pkg = JSON.parse(readFileSync(join(root, "servers/lookout-mcp/package.json"), "utf8")) as { version: string };
 
-/** The real feed with one mutation applied to its lookout-mcp listing. */
-function mutated(mutate: (mcp: Record<string, unknown>) => void): unknown {
+/** The real feed with one mutation applied to one listing (lookout-mcp unless named). */
+function mutated(mutate: (listing: Record<string, unknown>) => void, id = "lookout-mcp"): unknown {
   const clone = structuredClone(feed) as { listings: Record<string, unknown>[] };
-  mutate(clone.listings.find(l => l.id === "lookout-mcp")!);
+  mutate(clone.listings.find(l => l.id === id)!);
   return clone;
 }
 
@@ -83,5 +84,31 @@ describe("feed gate rejects malformed listings", () => {
     dup.listings.push(structuredClone(dup.listings[0]));
     expect(validateListings(dup, pkg.version).join("\n")).toMatch(/duplicate listing id/);
     expect(validateListings(feed, "9.9.9").join("\n")).toMatch(/version drift/);
+  });
+});
+
+describe("connectors Lookout dials", () => {
+  type Target = Record<string, unknown>;
+  const target = (l: Record<string, unknown>) => (l.install as Target[])[0]!;
+
+  test("a lookout target that runs a command, skips https or names no sign-in policy fails", () => {
+    const shapes: ((t: Target) => void)[] = [
+      t => { t.transport = "stdio"; t.command = "sh"; delete t.url; },
+      t => { t.url = "http://gmailmcp.googleapis.com/mcp/v1"; },
+      t => { t.auth = { type: "oauth", clientId: "x" }; },
+      t => { t.auth = { type: "oauth2-pkce", scope: "mcp" }; },
+    ];
+    for (const shape of shapes)
+      expect(validateListings(mutated(l => shape(target(l)), "gmail"), pkg.version).length).toBeGreaterThan(0);
+  });
+
+  test("an audience that isn't sha256 hex, and unknown availability, fail", () => {
+    expect(validateListings(mutated(l => { l.audience = ["usr_owner"]; }, "gmail"), pkg.version).join("\n")).toMatch(/audience/);
+    expect(validateListings(mutated(l => { l.availability = "beta"; }, "gmail"), pkg.version).join("\n")).toMatch(/availability/);
+  });
+
+  test("the entry and its folder move together", () => {
+    expect(validateListings(mutated(l => { l.version = "1.0.1"; }, "gmail"), pkg.version).join("\n")).toMatch(/plugin\.json|source\.ref/);
+    expect(validateListings(mutated(l => { target(l).url = "https://example.com/mcp"; }, "gmail"), pkg.version).join("\n")).toMatch(/mcp\.json/);
   });
 });

@@ -1,12 +1,14 @@
 // listings.json gate: JSON Schema validation plus the invariants a schema
 // cannot express: unique ids, one version source (listing version ===
-// servers/lookout-mcp package version === the source ref tag), and the
-// URL semantics mirrored from the Lookout monorepo's runtime validator
-// (src/customize/listings.ts validateListing): icon/homepage must be
-// parseable https URLs, install urls parseable http(s), and each transport
-// carries its required field. A bad listing can never merge.
+// servers/lookout-mcp package version === the source ref tag; a connector's
+// listing version === its plugin.json === the ref tag, its mcp.json naming
+// the url Lookout dials), and the URL semantics mirrored from the Lookout
+// monorepo's runtime validator (src/customize/listings.ts validateListing):
+// icon/homepage must be parseable https URLs, install urls parseable
+// http(s), and each transport carries its required field. A bad listing can
+// never merge.
 // CLI: bun run validate; test: listings.test.ts.
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import Ajv2020 from "ajv/dist/2020.js";
@@ -22,8 +24,8 @@ export interface Feed {
     homepage: string;
     icon: string;
     iconDark?: string;
-    source: { type: string; ref?: string };
-    install: { transport: string; url?: string; command?: string }[];
+    source: { type: string; ref?: string; path?: string };
+    install: { host: string; transport: string; url?: string; command?: string }[];
   }[];
 }
 
@@ -34,6 +36,29 @@ function httpsUrl(v: string): string | null {
   } catch {
     return "must be an https URL";
   }
+}
+
+const readJson = (path: string): unknown => JSON.parse(readFileSync(join(root, path), "utf8"));
+
+/** A listing under connectors/: its folder's plugin.json and mcp.json agree with it. */
+function connectorProblems(l: Feed["listings"][number]): string[] {
+  const where = `listing ${l.id}`;
+  const dir = l.source.path!;
+  if (dir !== `connectors/${l.id}`) return [`${where}: source.path must be connectors/${l.id}`];
+  if (!existsSync(join(root, dir, "plugin.json")) || !existsSync(join(root, dir, "mcp.json")))
+    return [`${where}: ${dir} needs plugin.json and mcp.json`];
+  const errors: string[] = [];
+  const plugin = readJson(`${dir}/plugin.json`) as { name?: string; version?: string; license?: string };
+  if (plugin.name !== l.id) errors.push(`${where}: plugin.json name ${plugin.name} != ${l.id}`);
+  if (plugin.version !== l.version) errors.push(`version drift: listing ${l.id} ${l.version} != plugin.json ${plugin.version}`);
+  if (plugin.license !== "MIT") errors.push(`${where}: plugin.json license must be MIT`);
+  if (l.source.ref !== `${l.id}-v${l.version}`) errors.push(`${where}: source.ref ${l.source.ref} != ${l.id}-v${l.version}`);
+  if (!l.icon.includes(`@${l.id}-v${l.version}/`)) errors.push(`${where}: icon must be pinned to ${l.id}-v${l.version}`);
+  const servers = Object.values((readJson(`${dir}/mcp.json`) as { mcpServers?: Record<string, { url?: string }> }).mcpServers ?? {});
+  const dialed = l.install.filter(t => t.host === "lookout").map(t => t.url);
+  if (servers.length !== 1 || dialed.length !== 1 || servers[0]!.url !== dialed[0])
+    errors.push(`${where}: mcp.json must name the one url its lookout install target dials`);
+  return errors;
 }
 
 /** All problems found, empty when the feed is sound. */
@@ -65,6 +90,7 @@ export function validateListings(feed: unknown, pkgVersion: string): string[] {
           try {
             const u = new URL(t.url);
             if (u.protocol !== "https:" && u.protocol !== "http:") errors.push(`${where}: install[${i}].url must be http(s)`);
+            if (t.host === "lookout" && u.protocol !== "https:") errors.push(`${where}: install[${i}].url for the lookout host must be https`);
           } catch {
             errors.push(`${where}: install[${i}].url must be a parseable http(s) URL (got "${t.url}")`);
           }
@@ -73,6 +99,7 @@ export function validateListings(feed: unknown, pkgVersion: string): string[] {
         errors.push(`${where}: install[${i}] (stdio) needs a command`);
       }
     }
+    if (l.source.type === "github" && l.source.path?.startsWith("connectors/")) errors.push(...connectorProblems(l));
   }
   const mcp = typed.listings.find(l => l.id === "lookout-mcp");
   if (!mcp) {
