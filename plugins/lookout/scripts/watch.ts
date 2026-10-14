@@ -169,12 +169,27 @@ function runSnapOf(runId: string, body: unknown): { snap: RunSnap; cursor?: stri
     })
     : [];
   const w = view.waiting && typeof view.waiting === "object" ? view.waiting as { reason?: unknown; until?: unknown } : undefined;
+  const agents = Array.isArray(view.calls)
+    ? view.calls.flatMap(c => {
+      if (!c || typeof c !== "object") return [];
+      const a = c as { key?: unknown; label?: unknown; state?: unknown; reason?: unknown; until?: unknown };
+      if (typeof a.key !== "string" || typeof a.state !== "string") return [];
+      return [{
+        key: a.key,
+        label: typeof a.label === "string" && a.label ? a.label : a.key,
+        state: a.state,
+        ...(typeof a.reason === "string" ? { reason: a.reason.slice(0, 200) } : {}),
+        ...(typeof a.until === "number" ? { until: a.until } : {}),
+      }];
+    })
+    : [];
   return {
     snap: {
       runId: typeof run?.id === "string" ? run.id : runId,
       name: typeof run?.name === "string" ? run.name : "",
       state: view.state,
       asks,
+      agents,
       ...(w
         ? {
           waiting: {

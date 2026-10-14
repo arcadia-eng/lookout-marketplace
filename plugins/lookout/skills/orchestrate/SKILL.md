@@ -15,13 +15,14 @@ Lookout chats are the workers. You are the outer agent. The tools are on the `lo
 
 ## Delegate
 
-`lookout_delegate` takes `prompt`, and optionally `workspace`, `projectId`, `model`, `effort`, `machine`, `lane`, `ephemeral`, `onQuota`, `fallbacks`.
+`lookout_delegate` takes `prompt`, and optionally `workspace`, `projectId`, `model`, `effort`, `machine`, `lane`, `ephemeral`, `onQuota`, `fallbacks`, `schema`.
 
 - Omit `model` and `effort` unless the user named them or the models skill picked one. The server default is the right default.
 - Omit `machine` for this machine. Pass a name from `lookout_machines` to run elsewhere, or `"auto"` when the user wants the load spread (the `vps-workers` skill). An explicit `machine` on one call does not change the session pick.
 - Several chats in one repository: `worktree: true` on each, so they never edit the same checkout. `repo` clones the repository onto the target machine first.
 - `ephemeral: true` is a throwaway scratch chat. Leave it off when the user should find the chat in the sidebar.
 - A lane that runs while nobody watches passes `onQuota: "wait"`: a spent plan or a rate limit parks it (state `parked`) and it goes on by itself at the reset, through a restart too. `onQuota: "fallback"` with `fallbacks` (up to 4 model ids, only ones the user is fine spending) moves it at once to the first listed model whose plan is open, and waits when none is. Without either the chat stops at the wall (`quota`) for you. Never list a model the user didn't pick: nothing outside `fallbacks` is used.
+- A review or a check whose answer you will read as data passes `schema` (a JSON Schema object, top level an object): the chat ends its turn by submitting a matching object, and the lane carries it as `result` (`resultError: "schema"` when it ended without one). Read `result`, never parse the prose.
 - The workspace for this repository is the current directory.
 
 For background work, do not spend a subagent per chat: delegate, then arm the fleet watcher once per batch (next section). The `lookout:worker` subagent is only for one chat you want to block on inside the agent panel (it waits with `lookout_check` `waitSeconds: 600`); do not also arm a watcher for that chat, you would be woken twice.
@@ -40,9 +41,13 @@ Monitor, `timeout_ms` 1740000, `persistent` false (or run it as a background com
 
 - `--machines "*"` covers this machine and every reachable one; name machines (`--machines denar-build,mac`) or watch one (`--machine denar-build`) instead. A remote machine's lines carry its name.
 - Without `--lane-prefix` it watches every chat on the machine, including the user's own; a prefix is the batch.
-- One workflow run (Workflows lab): `--run <wfr_id>` instead of `--fleet`; a line when it ends, pauses, waits on a plan reset or asks, and it exits there.
+- One workflow run (Workflows lab): `--run <wfr_id>` instead of `--fleet`; a line when it ends, pauses, waits on a plan reset, asks, or one of its agents parks or fails, and it exits on an end or an ask.
 - One chat only: `--thread <id>`.
 - The watcher needs the local app. On the hosted MCP with no local app, block on `lookout_fleet {waitSeconds}` instead.
+
+## Workflow runs
+
+When the `lookout` server lists `lookout_run_workflow` (the user turned workflow runs on in Lookout), staged programs of agents run in Lookout: a Claude Code workflow script mostly runs unchanged. Read `workflows.md` in this skill's folder before the first launch: what to change in a script, launching from a host chat, the watcher, answers, resume, and model picks.
 
 ## While it runs
 

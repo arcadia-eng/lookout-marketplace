@@ -337,6 +337,11 @@ export interface RunSnap {
   asks: { title?: string }[];
   /** Why nothing runs while it waits on a plan, and when that window resets. */
   waiting?: { reason?: string; until?: number };
+  /**
+   * The latest launch's agent calls (the view's `calls`): an agent parking at a
+   * plan wall or failing while the run stays "running" surfaces only here.
+   */
+  agents?: { key: string; label: string; state: string; reason?: string; until?: number }[];
   error?: string | null;
 }
 
@@ -350,14 +355,47 @@ export interface RunStep {
 }
 
 /**
+ * A run mark back to its run-level part and each agent's state. Null on a mark
+ * written before agents were tracked; that mark re-reads as a change once.
+ */
+function runMark(mark: string | null): { run: string; agents: Record<string, string> } | null {
+  if (!mark) return null;
+  try {
+    const v: unknown = JSON.parse(mark);
+    if (!Array.isArray(v) || v.length !== 5 || !v[4] || typeof v[4] !== "object") return null;
+    return { run: JSON.stringify(v.slice(0, 4)), agents: v[4] as Record<string, string> };
+  } catch { return null; }
+}
+
+/**
+ * Agents whose state changed since `before` into one worth a line: parked at a
+ * plan wall, held before it could start, or failed while the run goes on.
+ */
+function agentNews(snap: RunSnap, before: Record<string, string>): string[] {
+  const news: string[] = [];
+  for (const a of snap.agents ?? []) {
+    if (before[a.key] === a.state) continue;
+    const reason = a.reason?.slice(0, 160);
+    if (a.state === "failed") news.push(`${a.label} failed${reason ? `: ${reason}` : ""}`);
+    else if (a.state === "parked") news.push(`${a.label} parked${reason ? ` (${reason})` : ""}${a.until ? ` until ${isoMinute(a.until)}` : ""}`);
+    else if (a.state === "waiting") news.push(`${a.label} held${reason ? ` (${reason})` : ""}${a.until ? ` until ${isoMinute(a.until)}` : ""}`);
+  }
+  return news;
+}
+
+/**
  * One run read against the mark of the previous one. A line for an ask, an
  * end or a pause (the run goes nowhere until someone acts, so the watcher
- * exits beside the line), and one for a plan wall with its reset; a run that
- * merely advances says nothing. The same state twice says nothing.
+ * exits beside the line), one for a plan wall with its reset, and one for an
+ * agent of it parking or failing while the run goes on; a run that merely
+ * advances says nothing. The same state twice says nothing.
  */
 export function runStep(snap: RunSnap, before: string | null): RunStep {
   const at = `run ${snap.name || snap.runId} (${snap.runId})`;
-  const mark = `${snap.state}|${snap.asks.length}|${snap.waiting?.reason ?? ""}|${snap.waiting?.until ?? ""}`;
+  const agents: Record<string, string> = {};
+  for (const a of snap.agents ?? []) agents[a.key] = a.state;
+  const run = JSON.stringify([snap.state, snap.asks.length, snap.waiting?.reason ?? null, snap.waiting?.until ?? null]);
+  const mark = `${run.slice(0, -1)},${JSON.stringify(agents)}]`;
   if (before !== null && mark === before) return { line: null, mark, exit: false };
   if (snap.asks.length > 0 || snap.state === "awaiting_approval") {
     const q = snap.asks[0]?.title?.trim();
@@ -368,11 +406,19 @@ export function runStep(snap: RunSnap, before: string | null): RunStep {
     return { line: `[lookout] ${at} ${snap.state}${why}`, mark, exit: true };
   }
   if (snap.state === "paused") return { line: `[lookout] ${at} paused`, mark, exit: true };
+  const prev = runMark(before);
+  const news = agentNews(snap, prev?.agents ?? {});
   if (snap.state === "waiting") {
+    // the run-level line names the wall; only an agent change since is separate news
+    if (prev !== null && prev.run === run) {
+      if (news.length) return { line: `[lookout] ${at}: ${news.join("; ")}`, mark, exit: false };
+      return { line: null, mark, exit: false };
+    }
     const why = snap.waiting?.reason ? `: ${snap.waiting.reason}` : "";
     const until = snap.waiting?.until ? ` until ${isoMinute(snap.waiting.until)}` : "";
     return { line: `[lookout] ${at} waiting${why}${until}`, mark, exit: false };
   }
+  if (news.length) return { line: `[lookout] ${at}: ${news.join("; ")}`, mark, exit: false };
   return { line: null, mark, exit: false };
 }
 
