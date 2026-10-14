@@ -42,7 +42,9 @@ conversation), `fresh: true` (never reuse a result: checks of live state), `ask(
    a cut; it prints only what is new.
 4. Read the run once at the end: `lookout_workflows {runId}`. A result past 20,000 characters comes in pages
    (`resultTruncated.next` names the `resultFrom` call). A program that returns a compact object (counts, verdicts,
-   paths) and writes long findings to a file costs you far less context.
+   paths) and writes long findings to a file costs you far less context. One agent's result does not wait for the run:
+   `lookout_workflows {runId, agent: <label or agentId>}` returns it whole as soon as that agent is done, in the same
+   pages (`resultFrom`).
 
 ## While it runs
 

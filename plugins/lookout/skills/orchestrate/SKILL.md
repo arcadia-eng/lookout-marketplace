@@ -52,7 +52,7 @@ When the `lookout` server lists `lookout_run_workflow` (the user turned workflow
 ## While it runs
 
 - One chat: `lookout_check` with `waitSeconds` up to 900 on the local bridge (a hosted or proxied one cuts a wait to 55 and returns early). The call blocks. Do not issue another check of that chat until it returns.
-- The fleet: loop `lookout_fleet {waitSeconds: 900, cursor}`, passing back the `cursor` each answer returns (same filters). A call returns as soon as any chat changed state since that answer, with the ids in `waited.changed`, so a chat that finished between two calls is never missed. No polling script. `machines: "*"` covers every machine.
+- The fleet: loop `lookout_fleet {waitSeconds: 900, cursor}`, passing back the opaque `cursor` each answer returns with the same filters. A call returns as soon as any matching chat changed state, including one outside the page, with ids in `waited.changed`. Read `nextPage` with `page` on one machine and keep the returned cursor for the next watch: changes during paging still wake it. `cursorReset: true` means the snapshot expired or the server restarted; resynchronize all pages before deciding the batch settled. No polling script. `machines: "*"` covers every machine. The watcher reads every snapshot page and stores opaque cursors plus deduplication marks in its `--cursor` file; never decode a fleet cursor.
 - `interrupted` with `crashResume: "pending"`: Lookout restarted and resumes that delegated turn on its own, once. Leave it. `crashResume: "skipped"` (it went down again inside the resume) or plain `interrupted`: `lookout_retry`. `unfinished` names what died with the turn (a Shell command); the agent is told to rerun it.
 - `lookout_steer` refuses an interrupted chat (code `interrupted`): `lookout_retry` continues the cut-off turn, then steer if you have more to say.
 - `needs_input`: `lookout_answer` with the user's answer. Do not invent one.
@@ -60,6 +60,8 @@ When the `lookout` server lists `lookout_run_workflow` (the user turned workflow
 - `quota` (a chat without `onQuota`): `lookout_retry {threadId, model}` moves it now, `lookout_retry {threadId, wait: true}` waits for the reset (a reset already past goes at once).
 - A follow-up is `lookout_steer`, not a new delegate.
 - Stop a chat with `lookout_stop`. Cancel one subagent with `lookout_cancel_task`.
+- `lookout_tasks {threadId}` keeps active tasks and five recent finished summaries, with counts for the rest. Use `state`, `filter`, `limit` and `cursor: nextCursor` for older tasks. Workflow tasks contain compact agent status only: read `lookout_workflows {runId}` for progress and results, not the task's step list. A running workflow agent's old quota reason is not a live wait; `continued` counts its continuations. Model skips are grouped with the affected-call count.
+- `lookout_configure` returns a brief lane plus the settings and chat fields that changed, not a raw thread. `full: true` returns the complete lane.
 
 ## Load and caps
 

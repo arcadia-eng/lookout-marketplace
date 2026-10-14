@@ -26,6 +26,15 @@ import {
 
 /** The server's longest hold for a lanes or run wait. */
 const WAIT_S = 55;
+/**
+ * A read's budget past the server's hold. A busy app (hundreds of chats, a usage scan on its loop) has taken over
+ * 20 s to answer a plain read; a shorter budget reads a slow machine as a gone one.
+ */
+const READ_SLACK_MS = 60_000;
+/** Connection failures in a row (refused, no route, an HTTP error) before a machine is out of the batch; a timeout is not one. */
+const DOWN_AFTER = 3;
+/** The wait before the next try at a machine that failed `misses` times in a row: 2 s doubling to 30 s. */
+const backoffMs = (misses: number) => Math.min(30_000, 1000 * 2 ** Math.min(misses, 5));
 /** Omitted chats re-read by id in one round (a question, a quota wall, a crash resume). The rest stay unresolved. */
 const DETAIL_CAP = 400;
 
@@ -86,12 +95,15 @@ function emit(line: string): void {
 
 // --- one API read, with the headers a wait needs -----------------------------------
 
-type Read = { ok: true; body: unknown } | { ok: false; status: number };
+/** `timedOutS`: no answer within the budget (the server is up, busy); `error`: the connection itself failed. */
+type Read = { ok: true; body: unknown } | { ok: false; status: number; timedOutS?: number; error?: string };
 
-async function read(api: string, path: string, o: { ms?: number; waitS?: number; signal?: AbortSignal } = {}): Promise<Read> {
+async function read(api: string, path: string, o: { waitS?: number; signal?: AbortSignal } = {}): Promise<Read> {
   const waitS = o.waitS ?? 0;
+  const ms = waitS * 1000 + READ_SLACK_MS;
   const ctrl = new AbortController();
-  const timer = setTimeout(() => ctrl.abort(), o.ms ?? Math.max(2000, waitS * 1000 + 5000));
+  let timedOut = false;
+  const timer = setTimeout(() => { timedOut = true; ctrl.abort(); }, ms);
   const abortWith = () => ctrl.abort();
   o.signal?.addEventListener("abort", abortWith, { once: true });
   try {
@@ -106,18 +118,21 @@ async function read(api: string, path: string, o: { ms?: number; waitS?: number;
     });
     if (!res.ok) return { ok: false, status: res.status };
     return { ok: true, body: await res.json().catch(() => null) };
-  } catch {
-    return { ok: false, status: 0 };
+  } catch (e) {
+    if (timedOut) return { ok: false, status: 0, timedOutS: Math.round(ms / 1000) };
+    const code = e && typeof e === "object" && "code" in e && typeof e.code === "string" ? e.code : null;
+    return { ok: false, status: 0, error: code ?? (e instanceof Error ? e.message : "no connection") };
   } finally {
     clearTimeout(timer);
     o.signal?.removeEventListener("abort", abortWith);
   }
 }
 
-const why = (o: Read) => (o.ok ? "" : o.status ? `HTTP ${o.status}` : "unreachable");
+const why = (o: Read) =>
+  o.ok ? "" : o.status ? `HTTP ${o.status}` : o.timedOutS ? `no answer in ${o.timedOutS} s` : `unreachable: ${o.error ?? "no connection"}`;
 
 /** A lanes answer into the rows the fleet step takes. */
-function fleetRowsOf(body: unknown): { rows: FleetRow[]; cursor?: string; total: number | null; complete: boolean } | null {
+function fleetRowsOf(body: unknown): { rows: FleetRow[]; cursor?: string; nextPage?: string; cursorReset?: boolean; total: number | null; complete: boolean } | null {
   if (!body || typeof body !== "object") return null;
   const lanes = (body as { lanes?: unknown }).lanes;
   if (!Array.isArray(lanes)) return null;
@@ -144,11 +159,13 @@ function fleetRowsOf(body: unknown): { rows: FleetRow[]; cursor?: string; total:
       ...(typeof resetsAt === "number" ? { resetsAt } : {}),
     });
   }
-  const b = body as { cursor?: unknown; total?: unknown };
+  const b = body as { cursor?: unknown; total?: unknown; nextPage?: unknown; cursorReset?: boolean };
   const total = typeof b.total === "number" ? b.total : null;
   return {
     rows,
     ...(typeof b.cursor === "string" ? { cursor: b.cursor } : {}),
+    ...(typeof b.nextPage === "string" ? { nextPage: b.nextPage } : {}),
+    ...(b.cursorReset ? { cursorReset: true } : {}),
     total,
     // no `total` is not proof the page is everyone: a cut that forgot the count must not read as settled
     complete: total !== null && total <= rows.length,
@@ -206,22 +223,22 @@ function runSnapOf(runId: string, body: unknown): { snap: RunSnap; cursor?: stri
 
 // --- the cursor file: what the last arm saw ----------------------------------------
 
-interface Persisted { v: 1; cursors: Record<string, string>; marks: Record<string, Record<string, string>>; runs: Record<string, string> }
+interface Persisted { v: 2; scope: string; cursors: Record<string, string>; marks: Record<string, Record<string, string>>; runs: Record<string, string> }
 
-function loadPersisted(path: string | null): Persisted {
-  if (!path) return { v: 1, cursors: {}, marks: {}, runs: {} };
+function loadPersisted(path: string | null, scope: string): Persisted {
+  if (!path) return { v: 2, scope, cursors: {}, marks: {}, runs: {} };
   try {
     const p = JSON.parse(readFileSync(path, "utf8")) as Partial<Persisted>;
-    if (p && p.v === 1) {
+    if (p && p.v === 2 && p.scope === scope) {
       return {
-        v: 1,
+        v: 2, scope,
         cursors: p.cursors && typeof p.cursors === "object" ? p.cursors : {},
         marks: p.marks && typeof p.marks === "object" ? p.marks : {},
         runs: p.runs && typeof p.runs === "object" ? p.runs : {},
       };
     }
   } catch { /* a stale or foreign file reads as empty */ }
-  return { v: 1, cursors: {}, marks: {}, runs: {} };
+  return { v: 2, scope, cursors: {}, marks: {}, runs: {} };
 }
 
 function savePersisted(path: string | null, state: Persisted) {
@@ -267,7 +284,7 @@ async function resolveTargets(): Promise<{ targets: Target[]; notes: string[] }>
       ? "*"
       : (machinesFlag ?? "").split(",").map(s => s.trim()).filter(Boolean);
   if (refs !== "*" && refs.length === 0) usage("--machines names no machine");
-  const list = await localGet(base, "/api/network/machines", 4000);
+  const list = await localGet(base, "/api/network/machines", READ_SLACK_MS);
   const machines = list && typeof list === "object" && Array.isArray((list as { machines?: unknown }).machines)
     ? (list as { machines: Record<string, unknown>[] }).machines
     : null;
@@ -314,7 +331,7 @@ async function watchFleet(): Promise<never> {
   const { targets, notes } = await resolveTargets();
   for (const n of notes) emit(`[lookout] ${n}`);
   if (!targets.length) usage("no machine to watch");
-  const state = loadPersisted(cursorPath);
+  const state = loadPersisted(cursorPath, JSON.stringify({ base, targets: targets.map(t => t.api), lanePrefix }));
   const query = (waitS: number, since?: string) => {
     const p = new URLSearchParams({ limit: "200" });
     if (lanePrefix !== null) p.set("lanePrefix", lanePrefix);
@@ -331,18 +348,43 @@ async function watchFleet(): Promise<never> {
     pageComplete: true,
     /** Chats the page omitted, when the cursor named them and this round did not read their lanes. */
     off: null as Map<string, string> | null,
-    answering: true,
+    /** ok: its last read answered; retrying: it failed and is tried again after a backoff; down: out of the batch. */
+    state: "ok" as "ok" | "retrying" | "down",
+    /** Answered at least once this arm: its rows are a read, not the empty start. */
+    primed: false,
+    misses: 0,
+    /** Connection failures in a row (DOWN_AFTER). */
+    fails: 0,
+    /** The slow or unreadable line was printed for this streak of misses. */
+    told: false,
+    /** Wait before its next read: a backoff, or a pause after an instant answer. */
+    pause: 0,
   }));
-  // GET /api/lanes pages at 200 (working first, then newest). The cursor still names every matched chat.
-  // A batch is not settled on the page alone: an older queued chat, a workflow ask, a plan wait, or a crash
-  // resume past the cut would otherwise read as done and the lead would move on.
-  const hydrate = async (api: string, parsed: { rows: FleetRow[]; cursor?: string; total: number | null; complete: boolean }) => {
-    if (parsed.complete) return { rows: parsed.rows, off: null as Map<string, string> | null, cursor: null as Map<string, string> | null };
+  const live = (r: (typeof rt)[number]) => r.state === "ok" && r.primed;
+  // Opaque snapshots page without advancing the watch baseline, so an omitted question or plan wait cannot settle the batch.
+  const hydrate = async (api: string, parsed: NonNullable<ReturnType<typeof fleetRowsOf>>) => {
+    if (parsed.nextPage) {
+      const rows = [...parsed.rows];
+      let next = parsed.nextPage;
+      const pages = new Set<string>();
+      while (next && Date.now() < deadline && !pages.has(next)) {
+        pages.add(next);
+        const q = new URLSearchParams({ limit: "200", page: next });
+        if (lanePrefix !== null) q.set("lanePrefix", lanePrefix);
+        const got = await read(api, `/api/lanes?${q}`);
+        const page = got.ok ? fleetRowsOf(got.body) : null;
+        if (!page || page.cursorReset || page.cursor !== parsed.cursor) break;
+        rows.push(...page.rows);
+        next = page.nextPage ?? "";
+      }
+      return { rows, off: null, cursor: null, complete: !next && parsed.total !== null && rows.length >= parsed.total };
+    }
+    if (parsed.complete) return { rows: parsed.rows, off: null as Map<string, string> | null, cursor: null as Map<string, string> | null, complete: true };
     const cursor = parsed.cursor ? decodeFleetCursor(parsed.cursor) : null;
     const off0 = offPageMarks(parsed.rows, cursor);
     // a cursor shorter than `total` is not the matched set; the omitted chats cannot be judged from it
     if (!off0 || !cursor || (parsed.total !== null && cursor.size < parsed.total))
-      return { rows: parsed.rows, off: null, cursor: null };
+      return { rows: parsed.rows, off: null, cursor: null, complete: false };
     const need = offPageNeedsDetail(off0);
     const rank = (id: string) => {
       const mark = off0.get(id) ?? "";
@@ -354,13 +396,13 @@ async function watchFleet(): Promise<never> {
     for (let i = 0; i < ids.length; i += 80) {
       const q = new URLSearchParams({ limit: "200", ids: ids.slice(i, i + 80).join(",") });
       if (lanePrefix !== null) q.set("lanePrefix", lanePrefix);
-      const got = await read(api, `/api/lanes?${q}`, { ms: 8000 });
+      const got = await read(api, `/api/lanes?${q}`);
       const page = got.ok ? fleetRowsOf(got.body) : null;
-      if (!page) return { rows: [...parsed.rows, ...extra], off: offPageMarks([...parsed.rows, ...extra], cursor), cursor };
+      if (!page) return { rows: [...parsed.rows, ...extra], off: offPageMarks([...parsed.rows, ...extra], cursor), cursor, complete: false };
       extra.push(...page.rows);
     }
     const rows = [...parsed.rows, ...extra];
-    return { rows, off: offPageMarks(rows, cursor), cursor };
+    return { rows, off: offPageMarks(rows, cursor), cursor, complete: rows.length >= (parsed.total ?? Infinity) };
   };
   const step = async (r: (typeof rt)[number], body: unknown) => {
     const parsed = fleetRowsOf(body);
@@ -368,7 +410,7 @@ async function watchFleet(): Promise<never> {
     const hydrated = await hydrate(r.t.api, parsed);
     const machine = r.t.here ? undefined : r.t.label;
     const before = r.marks;
-    const out = fleetStep(hydrated.rows, before, { machine, complete: parsed.complete });
+    const out = fleetStep(hydrated.rows, before, { machine, complete: hydrated.complete });
     const answerExtra = hydrated.off ? offPageAnswers(before, hydrated.off, machine) : [];
     const lines = [
       ...out.lines,
@@ -392,82 +434,75 @@ async function watchFleet(): Promise<never> {
       const seen = new Set([...hydrated.rows.map(x => x.threadId), ...hydrated.cursor.keys()]);
       for (const id of [...r.marks.keys()]) if (!seen.has(id)) r.marks.delete(id);
     }
-    r.cursor = parsed.cursor ?? r.cursor;
+    if (hydrated.complete || hydrated.cursor) r.cursor = parsed.cursor ?? r.cursor;
     r.rows = hydrated.rows;
-    r.pageComplete = parsed.complete;
+    r.pageComplete = hydrated.complete;
     r.off = hydrated.off;
     state.cursors[r.t.label] = r.cursor ?? "";
     state.marks[r.t.label] = Object.fromEntries(r.marks);
     savePersisted(cursorPath, state);
     return { lines, answers: out.answers + answerExtra.length };
   };
-  let first = true;
+  type Target = (typeof rt)[number];
+  // each machine reads on its own clock, so a slow one never holds back another's lines
+  const readOnce = async (r: Target) => {
+    if (r.pause > 0) await Bun.sleep(r.pause);
+    // only a machine that answered its last read holds a wait; the rest get a plain read
+    const hold = live(r);
+    const waitS = hold ? Math.max(1, Math.min(WAIT_S, Math.ceil((deadline - Date.now()) / 1000))) : 0;
+    const started = Date.now();
+    const out = await read(r.t.api, query(waitS, r.cursor), { waitS });
+    return { r, out, ms: Date.now() - started };
+  };
+  const pending = new Map(rt.map(r => [r, readOnce(r)] as const));
+  const timeUp = Bun.sleep(Math.max(0, deadline - Date.now())).then(() => null);
   for (;;) {
-    const leftMs = deadline - Date.now();
-    if (leftMs <= 0) {
+    const got = await Promise.race([timeUp, ...pending.values()]);
+    if (got === null) {
       const more = rt.flatMap(r => [...(r.off?.values() ?? [])]);
-      if (rt.some(r => r.answering && !r.pageComplete && r.off === null))
+      if (rt.some(r => live(r) && !r.pageComplete && r.off === null))
         emit("[lookout] part of the fleet was cut off this read and could not be judged.");
       emit(fleetDeadline(rt.flatMap(r => r.rows), more));
       process.exit(0);
     }
-    const waitS = first ? 0 : Math.max(1, Math.min(WAIT_S, Math.ceil(leftMs / 1000)));
-    const roundStart = Date.now();
-    const over = new AbortController();
-    const inflight = rt.map((r, i) => {
-      // a machine that stopped answering gets a short probe, not a held wait
-      const holding = first || r.answering;
-      return {
-        i,
-        p: read(r.t.api, query(holding ? waitS : 0, first ? undefined : r.cursor), {
-          ...(holding ? { waitS } : { ms: 3000 }),
-          signal: over.signal,
-        }),
-      };
-    });
-    while (inflight.length) {
-      const { k, out: o } = await Promise.race(inflight.map((s, k) => s.p.then(out => ({ k, out }))));
-      const subject = inflight.splice(k, 1)[0]!;
-      const r = rt[subject.i]!;
-      const name = r.t.here ? "this machine" : r.t.label;
-      if (!o.ok) {
-        if (r.answering) {
-          r.answering = false;
-          emit(`[lookout] ${name} stopped answering (${why(o)}), not watched until it answers again`);
-        }
-        continue;
+    const { r, out: o, ms } = got;
+    const name = r.t.here ? "this machine" : r.t.label;
+    const out = o.ok ? await step(r, o.body) : null;
+    if (!out) {
+      r.misses++;
+      r.fails = o.ok || o.timedOutS ? 0 : r.fails + 1;
+      r.pause = backoffMs(r.misses);
+      if (r.state !== "down" && r.fails >= DOWN_AFTER) {
+        r.state = "down";
+        emit(`[lookout] ${name} stopped answering (${why(o)}), not watched until it answers again`);
+      } else if (r.state !== "down") {
+        r.state = "retrying";
+        if (!r.told) emit(`[lookout] ${name} ${o.ok ? "answered nothing readable" : o.timedOutS ? `is slow (${why(o)})` : `did not answer (${why(o)})`}, still watched; trying again`);
       }
-      const out = await step(r, o.body);
-      if (!out) {
-        r.answering = false;
-        emit(`[lookout] ${name} answered nothing readable, not watched this round`);
-        continue;
-      }
-      r.answering = true;
+      r.told = true;
+    } else {
+      if (r.state === "down") emit(`[lookout] ${name} answers again, watched again`);
+      Object.assign(r, { state: "ok", primed: true, misses: 0, fails: 0, told: false });
       for (const line of out.lines) emit(line);
-      if (out.answers > 0) {
-        over.abort();
-        process.exit(0);
-      }
+      if (out.answers > 0) process.exit(0);
+      // a fleet with nothing moving answers at once: never spin on it
+      r.pause = ms < 1000 ? 1000 : 0;
     }
-    if (rt.every(r => !r.answering)) {
+    if (rt.every(x => x.state === "down")) {
       emit("[lookout] fleet could not be watched (no machine answered).");
       process.exit(0);
     }
-    if (rt.every(r => r.answering && r.rows.length === 0 && r.pageComplete)) {
+    if (rt.every(x => live(x) && x.rows.length === 0 && x.pageComplete)) {
       emit(`[lookout] fleet: no chats to watch${lanePrefix !== null ? ` under lane prefix ${lanePrefix}` : ""}.`);
       process.exit(0);
     }
     // a cut page of settled rows is not the batch: omitted queued, new, asking, parked, or interrupted chats still count.
     // fleetPageSettled stays false while any row waits for its plan, so a plan wait never exits.
-    if (rt.every(r => r.answering && fleetPageSettled(r.rows, r.pageComplete, r.off) && !r.rows.some(rowWaitsForPlan))) {
-      const machines = rt.filter(r => r.answering).length;
-      emit(fleetSummary(rt.flatMap(r => fleetSummaryRows(r.rows, r.pageComplete ? null : r.off)), machines));
+    if (rt.every(x => live(x) && fleetPageSettled(x.rows, x.pageComplete, x.off) && !x.rows.some(rowWaitsForPlan))) {
+      emit(fleetSummary(rt.flatMap(x => fleetSummaryRows(x.rows, x.pageComplete ? null : x.off)), rt.length));
       process.exit(0);
     }
-    if (first) first = false;
-    // a fleet with nothing moving answers at once: never spin on it
-    else if (Date.now() - roundStart < 1000) await Bun.sleep(1000);
+    pending.set(r, readOnce(r));
   }
 }
 
@@ -475,7 +510,7 @@ async function watchFleet(): Promise<never> {
 
 async function watchRun(): Promise<never> {
   const run = runId!;
-  const state = loadPersisted(cursorPath);
+  const state = loadPersisted(cursorPath, JSON.stringify({ base, run }));
   const runKey = `run:${run}`;
   let mark: string | null = state.runs[run] ?? null;
   let since: string | undefined = state.cursors[runKey];
@@ -483,7 +518,11 @@ async function watchRun(): Promise<never> {
   const path = (waitS: number) =>
     `/api/workflows/${encodeURIComponent(run)}${waitS > 0 || since ? `?${new URLSearchParams({ ...(waitS > 0 ? { wait: String(waitS) } : {}), ...(since ? { since } : {}) })}` : ""}`;
   // the first read waits for nothing: a run already ended or asking exits at once
-  const first = await read(base, path(0));
+  let first = await read(base, path(0));
+  for (let misses = 1; !first.ok && first.timedOutS && Date.now() < deadline; misses++) {
+    await Bun.sleep(backoffMs(misses));
+    first = await read(base, path(0));
+  }
   if (!first.ok) {
     emit(`[lookout] run ${run} could not be watched (${why(first)}).`);
     process.exit(0);
@@ -540,7 +579,7 @@ else {
     return true;
   };
 
-  const first = laneOf(await localGet(base, `/api/lanes?ids=${encodeURIComponent(thread)}`, 2000), thread);
+  const first = laneOf(await localGet(base, `/api/lanes?ids=${encodeURIComponent(thread)}`, READ_SLACK_MS), thread);
   // a chat waiting for its plan is told once and still watched: it goes on by itself
   if (first && rowWaitsForPlan(first)) emitUnseen(watchLine(thread, first));
   else if (emitUnseen(watchLine(thread, first))) process.exit(0);
@@ -574,7 +613,7 @@ else {
         let parsed: { kind?: string; live?: boolean } | null = null;
         try { parsed = JSON.parse(ev.data) as { kind?: string; live?: boolean }; } catch { continue; }
         if (parsed?.kind !== "live" || parsed.live !== false) continue;
-        const lane = laneOf(await localGet(base, `/api/lanes?ids=${encodeURIComponent(thread)}`, 2000), thread);
+        const lane = laneOf(await localGet(base, `/api/lanes?ids=${encodeURIComponent(thread)}`, READ_SLACK_MS), thread);
         if (lane && rowWaitsForPlan(lane)) { emitUnseen(watchLine(thread, lane)); continue; }
         if (emitUnseen(watchLine(thread, lane))) { settled = true; break; }
       }
