@@ -9,7 +9,7 @@
 //   bun scripts/watch.ts --thread <id>                                       one chat
 //   bun scripts/watch.ts --fleet --lane-prefix p [--machines a,b | "*"]      a batch by lane-key prefix
 //   bun scripts/watch.ts --machine <name> [--lane-prefix p]                  one remote machine's batch
-//   bun scripts/watch.ts --run <wfr_id>                                      one workflow run (this machine)
+//   bun scripts/watch.ts --run <wfr_id> [--machine <name>]                   one workflow run (this machine, or that one)
 //
 // Every mode takes --url <lookout> (LOOKOUT_URL), --cursor <file> (what the
 // last arm saw, so a re-arm prints no event twice) and --until all-settled
@@ -96,7 +96,7 @@ function emit(line: string): void {
 // --- one API read, with the headers a wait needs -----------------------------------
 
 /** `timedOutS`: no answer within the budget (the server is up, busy); `error`: the connection itself failed. */
-type Read = { ok: true; body: unknown } | { ok: false; status: number; timedOutS?: number; error?: string };
+type Read = { ok: true; body: unknown } | { ok: false; status: number; timedOutS?: number; error?: string; detail?: string };
 
 async function read(api: string, path: string, o: { waitS?: number; signal?: AbortSignal } = {}): Promise<Read> {
   const waitS = o.waitS ?? 0;
@@ -116,7 +116,7 @@ async function read(api: string, path: string, o: { waitS?: number; signal?: Abo
       },
       signal: ctrl.signal,
     });
-    if (!res.ok) return { ok: false, status: res.status };
+    if (!res.ok) return { ok: false, status: res.status, detail: await res.text().then(t => t.slice(0, 300)).catch(() => "") };
     return { ok: true, body: await res.json().catch(() => null) };
   } catch (e) {
     if (timedOut) return { ok: false, status: 0, timedOutS: Math.round(ms / 1000) };
@@ -130,6 +130,9 @@ async function read(api: string, path: string, o: { waitS?: number; signal?: Abo
 
 const why = (o: Read) =>
   o.ok ? "" : o.status ? `HTTP ${o.status}` : o.timedOutS ? `no answer in ${o.timedOutS} s` : `unreachable: ${o.error ?? "no connection"}`;
+
+/** A 400 whose body is about the cursor ("since is not a cursor for these filters"): that server cannot read our stored one. */
+const cursorRejected = (o: Read) => !o.ok && o.status === 400 && /cursor/i.test(o.detail ?? "");
 
 /** A lanes answer into the rows the fleet step takes. */
 function fleetRowsOf(body: unknown): { rows: FleetRow[]; cursor?: string; nextPage?: string; cursorReset?: boolean; total: number | null; complete: boolean } | null {
@@ -261,14 +264,15 @@ const cursorPath = flag(argv, "--cursor");
 const maxMs = Number(process.env.LOOKOUT_WATCH_MAX_MS ?? WATCH_MAX_MS);
 const deadline = Date.now() + (Number.isFinite(maxMs) && maxMs > 0 ? maxMs : WATCH_MAX_MS);
 
-const fleetish = fleet || machineFlag !== null || machinesFlag !== null;
+// --machine names a fleet's one machine, or with --run the machine the run lives on
+const fleetish = fleet || machinesFlag !== null || (machineFlag !== null && runId === null);
 const selectors = [threadId, runId, fleetish ? "fleet" : null].filter(s => s !== null);
 if (selectors.length === 0) usage("one of --thread, the fleet (--fleet, --machine, --machines) or --run is required");
 if (selectors.length > 1) usage("pass one selector: --thread, the fleet, or --run");
 if (until !== null && until !== "all-settled") usage("--until all-settled is the only exit mode");
 if (lanePrefix !== null && !fleetish) usage("--lane-prefix goes with the fleet (--fleet, --machine, --machines)");
 if (machineFlag !== null && machinesFlag !== null) usage("pass --machine <name> or --machines <list>, not both");
-if (runId !== null && (machineFlag !== null || machinesFlag !== null)) usage("a workflow run is followed on this machine only; drop --machine and --machines");
+if (runId !== null && machinesFlag !== null) usage("a workflow run lives on one machine: pass --machine <name>, not --machines");
 if (lanePrefix === "") usage("--lane-prefix is empty");
 
 // --- the fleet: one read per machine, lines as each answers --------------------------
@@ -467,6 +471,15 @@ async function watchFleet(): Promise<never> {
     }
     const { r, out: o, ms } = got;
     const name = r.t.here ? "this machine" : r.t.label;
+    if (cursorRejected(o) && r.cursor) {
+      // the stored cursor is unreadable to that server (an app update changed its format): drop it and
+      // resync once from a fresh snapshot, never counting the 400 as the machine not answering
+      r.cursor = undefined;
+      delete state.cursors[r.t.label];
+      savePersisted(cursorPath, state);
+      pending.set(r, readOnce(r));
+      continue;
+    }
     const out = o.ok ? await step(r, o.body) : null;
     if (!out) {
       r.misses++;
@@ -510,7 +523,18 @@ async function watchFleet(): Promise<never> {
 
 async function watchRun(): Promise<never> {
   const run = runId!;
-  const state = loadPersisted(cursorPath, JSON.stringify({ base, run }));
+  // a run on another machine is read through this machine's relay surface, as a remote fleet is
+  let api = base;
+  let machine: string | undefined;
+  if (machineFlag !== null) {
+    const { targets, notes } = await resolveTargets();
+    for (const n of notes) emit(`[lookout] ${n}`);
+    const t = targets[0];
+    if (!t) { emit(`[lookout] run ${run} could not be watched (${machineFlag} is not reachable).`); process.exit(0); }
+    api = t.api;
+    machine = t.here ? undefined : t.label;
+  }
+  const state = loadPersisted(cursorPath, JSON.stringify({ base: api, run }));
   const runKey = `run:${run}`;
   let mark: string | null = state.runs[run] ?? null;
   let since: string | undefined = state.cursors[runKey];
@@ -518,23 +542,23 @@ async function watchRun(): Promise<never> {
   const path = (waitS: number) =>
     `/api/workflows/${encodeURIComponent(run)}${waitS > 0 || since ? `?${new URLSearchParams({ ...(waitS > 0 ? { wait: String(waitS) } : {}), ...(since ? { since } : {}) })}` : ""}`;
   // the first read waits for nothing: a run already ended or asking exits at once
-  let first = await read(base, path(0));
+  let first = await read(api, path(0));
   for (let misses = 1; !first.ok && first.timedOutS && Date.now() < deadline; misses++) {
     await Bun.sleep(backoffMs(misses));
-    first = await read(base, path(0));
+    first = await read(api, path(0));
   }
   if (!first.ok) {
-    emit(`[lookout] run ${run} could not be watched (${why(first)}).`);
+    emit(`[lookout] ${machine ? `${machine}: ` : ""}run ${run} could not be watched (${why(first)}).`);
     process.exit(0);
   }
   let parsed = runSnapOf(run, first.body);
   if (!parsed) {
-    emit(`[lookout] run ${run} could not be read.`);
+    emit(`[lookout] ${machine ? `${machine}: ` : ""}run ${run} could not be read.`);
     process.exit(0);
   }
   for (;;) {
     since = parsed.cursor ?? since;
-    const out = runStep(parsed.snap, mark);
+    const out = runStep(parsed.snap, mark, machine);
     mark = out.mark;
     snap = parsed.snap;
     state.runs[run] = mark;
@@ -544,12 +568,12 @@ async function watchRun(): Promise<never> {
     if (out.exit) process.exit(0);
     const leftMs = deadline - Date.now();
     if (leftMs <= 0) {
-      emit(runDeadline(snap ?? { runId: run, name: "", state: "unknown", asks: [] }));
+      emit(runDeadline(snap ?? { runId: run, name: "", state: "unknown", asks: [] }, machine));
       process.exit(0);
     }
     const waitS = Math.max(1, Math.min(WAIT_S, Math.ceil(leftMs / 1000)));
     const started = Date.now();
-    const o = await read(base, path(waitS), { waitS });
+    const o = await read(api, path(waitS), { waitS });
     if (o.ok) {
       const next = runSnapOf(run, o.body);
       if (next) {

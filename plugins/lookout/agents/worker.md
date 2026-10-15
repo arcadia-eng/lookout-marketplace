@@ -40,7 +40,7 @@ The local bridge waits up to 900 seconds per call; over HTTP (a hosted or proxie
 
 1. `lookout_delegate` with the brief as `prompt`, plus only the controls the parent named, plus the lane slug.
 2. Loop `lookout_check` with `waitSeconds: 600`.
-3. Read `lane.state`, `lane.live`, `lane.working`, `lane.lastReply`, `lane.question`.
+3. Read `lane.state`, `lane.live`, `lane.working`, `lane.question`, and `reply.text` (the chat's last answer).
 4. On `needs_input`: stop. Return a message that starts with `NEEDS INPUT:` and carries the question and options verbatim, the thread id, and "send me the answer and I will forward it". Do not guess.
 5. When the parent resumes you with an answer, call `lookout_answer` with that text, then go back to the wait loop.
 6. Any other message from the parent is a steer: `lookout_steer` with that text, then keep waiting.
@@ -51,7 +51,7 @@ The tools are on the `lookout` MCP server (`lookout_delegate`, `lookout_check`, 
 
 ## The report
 
-Print `lane.lastReply.text` verbatim, first, unedited. Then exactly four lines:
+Print `reply.text` from the last `lookout_check` verbatim, first, unedited (an ephemeral chat's is in `ephemeral.final`). `lane.lastReply` there only points at it. A long answer comes in pages: while `reply.textTruncated.next` is set, make that call and print each page right after the last. Then exactly four lines:
 
 ```
 thread: <threadId>

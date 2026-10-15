@@ -390,8 +390,8 @@ function agentNews(snap: RunSnap, before: Record<string, string>): string[] {
  * agent of it parking or failing while the run goes on; a run that merely
  * advances says nothing. The same state twice says nothing.
  */
-export function runStep(snap: RunSnap, before: string | null): RunStep {
-  const at = `run ${snap.name || snap.runId} (${snap.runId})`;
+export function runStep(snap: RunSnap, before: string | null, machine?: string): RunStep {
+  const at = `${machine ? `${machine}: ` : ""}run ${snap.name || snap.runId} (${snap.runId})`;
   const agents: Record<string, string> = {};
   for (const a of snap.agents ?? []) agents[a.key] = a.state;
   const run = JSON.stringify([snap.state, snap.asks.length, snap.waiting?.reason ?? null, snap.waiting?.until ?? null]);
@@ -429,9 +429,9 @@ export function deadlineLine(threadId: string): string {
   return `[lookout] ${threadId} still working. Arm the watcher again.`;
 }
 
-/** The re-arm line at the deadline for a run. */
-export function runDeadline(snap: RunSnap): string {
-  return `[lookout] run ${snap.name || snap.runId} (${snap.runId}) still ${snap.state}. Arm the watcher again.`;
+/** The re-arm line at the deadline for a run (on `machine` when it isn't this one). */
+export function runDeadline(snap: RunSnap, machine?: string): string {
+  return `[lookout] ${machine ? `${machine}: ` : ""}run ${snap.name || snap.runId} (${snap.runId}) still ${snap.state}. Arm the watcher again.`;
 }
 
 /** Skip a line the previous arm already printed. */

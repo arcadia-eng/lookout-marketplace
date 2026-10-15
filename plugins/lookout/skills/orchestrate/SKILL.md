@@ -24,6 +24,7 @@ Lookout chats are the workers. You are the outer agent. The tools are on the `lo
 - A lane that runs while nobody watches passes `onQuota: "wait"`: a spent plan or a rate limit parks it (state `parked`) and it goes on by itself at the reset, through a restart too. `onQuota: "fallback"` with `fallbacks` (up to 4 model ids, only ones the user is fine spending) moves it at once to the first listed model whose plan is open, and waits when none is. Without either the chat stops at the wall (`quota`) for you. Never list a model the user didn't pick: nothing outside `fallbacks` is used.
 - A review or a check whose answer you will read as data passes `schema` (a JSON Schema object, top level an object): the chat ends its turn by submitting a matching object, and the lane carries it as `result` (`resultError: "schema"` when it ended without one). Read `result`, never parse the prose.
 - The workspace for this repository is the current directory.
+- A folder no project has yet becomes one only where the user lets this client add projects. Without that, `lookout_delegate` and `lookout_create_project` refuse it with `grant_needed` (or `outside_grant` for a folder outside what was allowed), and `setting` names the place in Lookout (`Settings > App access > Add projects > <client>`). Ask the user to allow it there, then call again; meanwhile use an existing `projectId` from `closest` or `lookout_projects`. Never route around it through another folder.
 
 For background work, do not spend a subagent per chat: delegate, then arm the fleet watcher once per batch (next section). The `lookout:worker` subagent is only for one chat you want to block on inside the agent panel (it waits with `lookout_check` `waitSeconds: 600`); do not also arm a watcher for that chat, you would be woken twice.
 
@@ -41,7 +42,7 @@ Monitor, `timeout_ms` 1740000, `persistent` false (or run it as a background com
 
 - `--machines "*"` covers this machine and every reachable one; name machines (`--machines denar-build,mac`) or watch one (`--machine denar-build`) instead. A remote machine's lines carry its name.
 - Without `--lane-prefix` it watches every chat on the machine, including the user's own; a prefix is the batch.
-- One workflow run (Workflows lab): `--run <wfr_id>` instead of `--fleet`; a line when it ends, pauses, waits on a plan reset, asks, or one of its agents parks or fails, and it exits on an end or an ask.
+- One workflow run (Workflows lab): `--run <wfr_id>` instead of `--fleet` (`--machine <name>` for a run on another machine); a line when it ends, pauses, waits on a plan reset, asks, or one of its agents parks or fails, and it exits on an end or an ask.
 - One chat only: `--thread <id>`.
 - The watcher needs the local app. On the hosted MCP with no local app, block on `lookout_fleet {waitSeconds}` instead.
 
@@ -77,4 +78,8 @@ A lane key finds its chat: `lookout_fleet` with `lane`.
 
 A worktree chat's branch is in `lookout_check` `reply.git`. Land it with `lookout_merge_worktree` (into that machine's checkout) or `lookout_push_worktree` (to the remote, then fetch it here).
 
-The lookout repo lands a remote chat's work from this Mac: the chat pushes its branch (`lookout_push_worktree`), then you, or a Mac-side chat, runs `bun scripts/ship.ts --branch <branch>` from any checkout. That fetches the branch, checks it in a throwaway worktree of its own and queues it like a lane ship; it refuses in one line (nonzero exit) when origin has no such branch, its tip is already on main, or the check is red, and exits 2 when the branch does not merge into main (merge origin/main into it, push, and run it again). `bun scripts/ship.ts --status <id>` reads the outcome, and `--status <id> --wait` as a background command tells you when it settles.
+The lookout repo lands a remote chat's work from this Mac: the chat pushes its branch (`lookout_push_worktree`), then you, or a Mac-side chat, runs `bun scripts/ship.ts --branch <branch>` from any checkout. That fetches the branch, checks it in a throwaway worktree of its own and queues it like a lane ship; it refuses in one line (nonzero exit) when origin has no such branch, its tip is already on main, or the check is red, and exits 2 when the branch does not merge into main (merge origin/main into it, push, and run it again). `bun scripts/ship.ts --status <id>` reads the outcome.
+
+## Landings in the lookout repo
+
+A Lookout chat (or its Task worker) that ships a lane hears the landing itself: the server wakes it with the outcome as a notice, a red with its reason and the `lane.ts new <name> --branch <branch>` that takes it back. So a delegated chat ships, runs `lane.ts done`, reports `queued <id>` and ends its turn; never tell it to wait on `--status` or poll, and do not re-delegate a red: its chat already took it back. You, outside Lookout, have no such wake: follow a landing of your own with `bun scripts/timeout.ts 580 bun scripts/ship.ts --status <id> --wait` as a background command, armed again while it is still queued, and read the reds nobody shipped again with `bun scripts/ship.ts --status` on main.

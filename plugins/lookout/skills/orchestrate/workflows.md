@@ -2,7 +2,9 @@
 
 Read this when the `lookout` server lists `lookout_run_workflow` (the user turned on Settings, Chat, Workflows,
 "Workflow runs"; the tools appear within 30 s, no restart). A run is a JavaScript program whose `agent()` calls run as
-Lookout agents in one chat's workspace on this machine. Runs do not cross the machine relay.
+Lookout agents in one chat's workspace, on this machine or, with `machine`, on another machine of the account. That
+machine runs it only while its own Workflow runs switch is on, which only the user turns on (`lookout capacity --on
+<machine> --workflows on`); a `runs_off` refusal means ask them, never work around it.
 
 ## Run a Claude Code workflow script in Lookout
 
@@ -30,8 +32,9 @@ conversation), `fresh: true` (never reuse a result: checks of live state), `ask(
 ## Launch and follow
 
 1. A host chat: `lookout_delegate {workspace, lane, model}` with no `prompt` makes one without a model turn. Its model
-   is every agent's default.
-2. `lookout_run_workflow {threadId, path, args}`. It returns with `runId` once the first agent starts. The run is
+   is every agent's default. For heavy runs, put it on a VPS: `lookout_delegate {machine, workspace or repo, lane}`.
+2. `lookout_run_workflow {threadId, path, args}` (and `machine` for a host chat on another machine: the file is read
+   here and sent; a saved `name` resolves there). It returns with `runId` once the first agent starts. The run is
    quiet: its end wakes no model in the host chat (`wake: true` asks for that).
 3. Arm one watcher per run instead of looping reads:
    ```bash
@@ -39,12 +42,12 @@ conversation), `fresh: true` (never reuse a result: checks of live state), `ask(
    ```
    Monitor, `timeout_ms` 1740000, or a background command. One line when the run ends, pauses, waits on a plan reset,
    asks, or one of its agents parks or fails; it exits on an end or an ask. Re-arm with the same `--cursor` file after
-   a cut; it prints only what is new.
+   a cut; it prints only what is new. A run on another machine: add `--machine <name>`.
 4. Read the run once at the end: `lookout_workflows {runId}`. A result past 20,000 characters comes in pages
-   (`resultTruncated.next` names the `resultFrom` call). A program that returns a compact object (counts, verdicts,
-   paths) and writes long findings to a file costs you far less context. One agent's result does not wait for the run:
-   `lookout_workflows {runId, agent: <label or agentId>}` returns it whole as soon as that agent is done, in the same
-   pages (`resultFrom`).
+   (`resultTruncated.next` names the `resultFrom` call); `progress: true` adds its status.md text (every agent). A
+   program that returns a compact object (counts, verdicts, paths) and writes long findings to a file costs you far
+   less context. One agent's result does not wait for the run: `lookout_workflows {runId, agent: <label or agentId>}`
+   returns it whole as soon as that agent is done, in the same pages (`resultFrom`).
 
 ## While it runs
 
