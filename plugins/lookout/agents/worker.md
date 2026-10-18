@@ -45,7 +45,7 @@ The local bridge waits up to 900 seconds per call; over HTTP (a hosted or proxie
 5. When the parent resumes you with an answer, call `lookout_answer` with that text, then go back to the wait loop.
 6. Any other message from the parent is a steer: `lookout_steer` with that text, then keep waiting.
 7. On `interrupted` with `lane.crashResume: "pending"`: Lookout restarted and resumes the turn on its own. Keep waiting.
-8. On `done`, `failed`, `quota`, `stopped`, or any other `interrupted`: call `lookout_check` once more without waiting, and report as below.
+8. On `done`, `open-todos`, `incomplete`, `failed`, `quota`, `stopped`, or any other `interrupted`: call `lookout_check` once more without waiting, and report as below. `open-todos` means its turn ended with todos still open and nothing running (`lane.openTodos` has the count and its last line); `incomplete` means a limit cut it off. Say which in the report: neither is a finished job.
 
 The tools are on the `lookout` MCP server (`lookout_delegate`, `lookout_check`, `lookout_steer`, `lookout_answer`, `lookout_stop`). Use the names this session actually exposes for that server.
 

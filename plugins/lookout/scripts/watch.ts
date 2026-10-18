@@ -58,6 +58,7 @@ function laneOf(body: unknown, threadId: string): LaneSnap | null {
   const question = row.question && typeof row.question === "object" ? (row.question as { title?: unknown }).title : undefined;
   const last = row.lastReply && typeof row.lastReply === "object" ? (row.lastReply as { text?: unknown }).text : undefined;
   const parked = parkedOf(row.parked);
+  const openTodos = openTodosOf(row.openTodos);
   return {
     state: row.state,
     live: row.live === true,
@@ -65,6 +66,10 @@ function laneOf(body: unknown, threadId: string): LaneSnap | null {
     ...(typeof row.title === "string" ? { title: row.title } : {}),
     ...(typeof question === "string" ? { question } : {}),
     ...(typeof last === "string" ? { lastReply: last } : {}),
+    ...(typeof row.lastStopReason === "string" ? { lastStopReason: row.lastStopReason } : {}),
+    ...(openTodos ? { openTodos } : {}),
+    ...(Array.isArray(row.shells) && row.shells.length ? { shells: row.shells } : {}),
+    ...(Array.isArray(row.watches) && row.watches.length ? { watches: row.watches } : {}),
     ...(parked ? { parked } : {}),
   };
 }
@@ -74,6 +79,13 @@ function parkedOf(v: unknown): LaneSnap["parked"] | undefined {
   if (!v || typeof v !== "object") return undefined;
   const p = v as { until?: unknown; model?: unknown };
   return { ...(typeof p.until === "number" ? { until: p.until } : {}), ...(typeof p.model === "string" ? { model: p.model } : {}) };
+}
+
+/** A lane's `openTodos` (the open count and the turn's last line), narrowed. */
+function openTodosOf(v: unknown): LaneSnap["openTodos"] {
+  if (!v || typeof v !== "object") return undefined;
+  const o = v as { count?: unknown; lastLine?: unknown };
+  return typeof o.count === "number" ? { count: o.count, lastLine: typeof o.lastLine === "string" ? o.lastLine : "" } : undefined;
 }
 
 function readCursor(path: string | null): string | null {
@@ -148,6 +160,7 @@ function fleetRowsOf(body: unknown): { rows: FleetRow[]; cursor?: string; nextPa
     const last = r.lastReply && typeof r.lastReply === "object" ? (r.lastReply as { text?: unknown }).text : undefined;
     const resetsAt = r.error && typeof r.error === "object" ? (r.error as { resetsAt?: unknown }).resetsAt : undefined;
     const parked = parkedOf(r.parked);
+    const openTodos = openTodosOf(r.openTodos);
     rows.push({
       ...(parked ? { parked } : {}),
       threadId: r.threadId,
@@ -157,6 +170,10 @@ function fleetRowsOf(body: unknown): { rows: FleetRow[]; cursor?: string; nextPa
       ...(typeof r.title === "string" ? { title: r.title } : {}),
       ...(typeof question === "string" ? { question } : {}),
       ...(typeof last === "string" ? { lastReply: last } : {}),
+      ...(typeof r.lastStopReason === "string" ? { lastStopReason: r.lastStopReason } : {}),
+      ...(openTodos ? { openTodos } : {}),
+      ...(Array.isArray(r.shells) && r.shells.length ? { shells: r.shells } : {}),
+      ...(Array.isArray(r.watches) && r.watches.length ? { watches: r.watches } : {}),
       ...(typeof r.asking === "number" && r.asking > 0 ? { asking: r.asking } : {}),
       ...(typeof r.crashResume === "string" ? { crashResume: r.crashResume } : {}),
       ...(typeof resetsAt === "number" ? { resetsAt } : {}),

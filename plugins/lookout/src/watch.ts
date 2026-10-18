@@ -34,6 +34,13 @@ export interface LaneSnap {
   title?: string;
   question?: string;
   lastReply?: string;
+  /** How the last turn ended (the lane's `lastStopReason`); an `incomplete` state's which limit. */
+  lastStopReason?: string;
+  /** The lane's `openTodos`: its last turn ended with open todos while nothing of its own ran. */
+  openTodos?: { count: number; lastLine: string };
+  /** Its own background commands and watches still running (the lane's `shells`/`watches` rows). */
+  shells?: readonly unknown[];
+  watches?: readonly unknown[];
   /** State parked: the model whose plan it waits for, and the reset (the lane's `parked`). */
   parked?: { until?: number; model?: string };
 }
@@ -45,8 +52,23 @@ const OPEN = new Set(["running", "background", "compacting", "restoring"]);
 const IN_FLIGHT = new Set(["new", "running", "queued", "background", "compacting", "restoring"]);
 
 /** The states a batch settles into, display order; anything else a lane may one day say is still watched, not told. */
-const SETTLED_ORDER = ["done", "incomplete", "stopped", "quota", "failed", "interrupted"] as const;
+const SETTLED_ORDER = ["done", "open-todos", "incomplete", "stopped", "quota", "failed", "interrupted"] as const;
 const SETTLED = new Set<string>(SETTLED_ORDER);
+
+// The wire keeps `done` on such a lane; src/ontology/product/open-todos.ts (mirrored here)
+// is the derivation every surface shares.
+const OPEN_TODOS = "open-todos";
+const laneOpenTodos = (l: Pick<LaneSnap, "state" | "openTodos" | "shells" | "watches">): LaneSnap["openTodos"] =>
+  l.state === "done" && !l.shells?.length && !l.watches?.length ? l.openTodos : undefined;
+const openTodosLine = (n: number): string => `stopped with ${n} open ${n === 1 ? "todo" : "todos"}, nothing running`;
+/** endedHow (src/server/lanes.ts) on the stop reasons that settle a lane `incomplete`. */
+const incompleteHow = (stop: string | undefined): string => {
+  const s = stop ?? "limit";
+  return s === "max_rounds" ? "hit the round limit"
+    : s === "length" ? "hit the output limit"
+    : s === "context_exhausted" ? "ran out of context"
+    : `ended (${s})`;
+};
 
 export interface WatchExtras {
   /** The chat's workflow runs waiting on a person (the lane's `asking`). */
@@ -90,6 +112,9 @@ export function watchLine(threadId: string, lane: LaneSnap | null, x: WatchExtra
     const resets = x.resetsAt ? ` (resets ${isoMinute(x.resetsAt)})` : "";
     return `[lookout] ${at} quota${resets}${replyTail(lane.lastReply)}`;
   }
+  const todos = laneOpenTodos(lane);
+  if (todos) return `[lookout] ${at} ${openTodosLine(todos.count)}${replyTail(todos.lastLine || lane.lastReply)}`;
+  if (lane.state === "incomplete") return `[lookout] ${at} incomplete: ${incompleteHow(lane.lastStopReason)}${replyTail(lane.lastReply)}`;
   return `[lookout] ${at} ${lane.state}${replyTail(lane.lastReply)}`;
 }
 
@@ -115,9 +140,9 @@ export function rowOpen(row: FleetRow): boolean {
   return !SETTLED.has(row.state);
 }
 
-/** The mark a fleet read keeps of a chat: its state, a workflow ask, a crash resume. */
+/** The mark a fleet read keeps of a chat: its state, a workflow ask, an open-todos settle, a crash resume. */
 export function rowMark(row: FleetRow): string {
-  return `${row.state}${(row.asking ?? 0) > 0 ? "+asking" : ""}${row.crashResume ? `~${row.crashResume}` : ""}`;
+  return `${row.state}${(row.asking ?? 0) > 0 ? "+asking" : ""}${laneOpenTodos(row) ? "+todos" : ""}${row.crashResume ? `~${row.crashResume}` : ""}`;
 }
 
 /** A mark back to whether the batch still waits on that chat. */
@@ -182,10 +207,13 @@ export function fleetStep(rows: FleetRow[], before: Map<string, string>, x: { ma
   return { lines, marks, open, answers };
 }
 
-/** The line that ends a settled batch: one count per state it settled into. */
+/** The line that ends a settled batch: one count per state it settled into (an open-todos settle counts its own). */
 export function fleetSummary(rows: FleetRow[], machines = 1): string {
   const counts = new Map<string, number>();
-  for (const r of rows) counts.set(r.state, (counts.get(r.state) ?? 0) + 1);
+  for (const r of rows) {
+    const state = laneOpenTodos(r) ? OPEN_TODOS : r.state;
+    counts.set(state, (counts.get(state) ?? 0) + 1);
+  }
   const parts = SETTLED_ORDER.filter(s => counts.has(s)).map(s => `${counts.get(s)} ${s}`);
   const where = machines > 1 ? ` across ${machines} machines` : "";
   return `[lookout] fleet settled${where}: ${parts.join(", ")}`;

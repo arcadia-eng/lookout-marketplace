@@ -15,7 +15,9 @@ Lookout chats are the workers. You are the outer agent. The tools are on the `lo
 
 ## Delegate
 
-`lookout_delegate` takes `prompt`, and optionally `workspace`, `projectId`, `model`, `effort`, `machine`, `lane`, `ephemeral`, `onQuota`, `fallbacks`, `schema`.
+`lookout_delegate` takes `prompt`, and optionally `workspace`, `projectId`, `title`, `model`, `effort`, `machine`, `lane`, `ephemeral`, `onQuota`, `fallbacks`, `schema`.
+
+- `title` is the chat's row in the sidebar: 2 to 6 words, at most 40 characters ("Fix the login redirect"). The goal goes in the prompt. A longer title is not used: the chat titles itself from its first exchange and the answer's `titleNote` says why. A `lookout_configure` rename over 40 characters is refused (`title_too_long`) and nothing in the call changes. Omit it and Lookout titles the chat.
 
 - Omit `model` and `effort` unless the user named them or the models skill picked one. The server default is the right default.
 - Omit `machine` for this machine. Pass a name from `lookout_machines` to run elsewhere, or `"auto"` when the user wants the load spread (the `vps-workers` skill). An explicit `machine` on one call does not change the session pick.
@@ -23,7 +25,7 @@ Lookout chats are the workers. You are the outer agent. The tools are on the `lo
 - `ephemeral: true` is a throwaway scratch chat. Leave it off when the user should find the chat in the sidebar.
 - A lane that runs while nobody watches passes `onQuota: "wait"`: a spent plan or a rate limit parks it (state `parked`) and it goes on by itself at the reset, through a restart too. `onQuota: "fallback"` with `fallbacks` (up to 4 model ids, only ones the user is fine spending) moves it at once to the first listed model whose plan is open, and waits when none is. Without either the chat stops at the wall (`quota`) for you. Never list a model the user didn't pick: nothing outside `fallbacks` is used.
 - A review or a check whose answer you will read as data passes `schema` (a JSON Schema object, top level an object): the chat ends its turn by submitting a matching object, and the lane carries it as `result` (`resultError: "schema"` when it ended without one). Read `result`, never parse the prose.
-- The workspace for this repository is the current directory.
+- A lane in the lookout repo runs in the tree `bun scripts/lane.ts new` made for it, never in the current directory ("Lanes in the lookout repo", below). Another repository's chat works in the current directory, with `worktree: true` when several share it.
 - A folder no project has yet becomes one only where the user lets this client add projects. Without that, `lookout_delegate` and `lookout_create_project` refuse it with `grant_needed` (or `outside_grant` for a folder outside what was allowed), and `setting` names the place in Lookout (`Settings > App access > Add projects > <client>`). Ask the user to allow it there, then call again; meanwhile use an existing `projectId` from `closest` or `lookout_projects`. Never route around it through another folder.
 
 For background work, do not spend a subagent per chat: delegate, then arm the fleet watcher once per batch (next section). The `lookout:worker` subagent is only for one chat you want to block on inside the agent panel (it waits with `lookout_check` `waitSeconds: 600`); do not also arm a watcher for that chat, you would be woken twice.
@@ -59,6 +61,7 @@ When the `lookout` server lists `lookout_run_workflow` (the user turned workflow
 - `needs_input`: `lookout_answer` with the user's answer. Do not invent one.
 - `parked`: the chat waits for its plan's reset and goes on by itself. Do not poll it, retry it or re-delegate it; the watcher or `lookout_fleet` tells you when it ends. `lookout_stop` ends the wait.
 - `quota` (a chat without `onQuota`): `lookout_retry {threadId, model}` moves it now, `lookout_retry {threadId, wait: true}` waits for the reset (a reset already past goes at once).
+- `open-todos` or `incomplete` on a settle is not done: it stopped with todos open and nothing running (`lane.openTodos` has the count and its last line) or a limit cut the turn (`lane.lastStopReason` says which). Steer it to go on, or ask for its report.
 - A follow-up is `lookout_steer`, not a new delegate.
 - Stop a chat with `lookout_stop`. Cancel one subagent with `lookout_cancel_task`.
 - `lookout_tasks {threadId}` keeps active tasks and five recent finished summaries, with counts for the rest. Use `state`, `filter`, `limit` and `cursor: nextCursor` for older tasks. Workflow tasks contain compact agent status only: read `lookout_workflows {runId}` for progress and results, not the task's step list. A running workflow agent's old quota reason is not a live wait; `continued` counts its continuations. Model skips are grouped with the affected-call count.
@@ -70,15 +73,33 @@ No machine caps or holds delegated turns by default: they start at once however 
 
 Project folders: `lookout_configure_project {projectId, folders: [primary, ...extra]}` is the full ordered list; the first is the chat cwd and cannot move, the rest are added, removed or reordered.
 
+## Agents
+
+`lookout_configure_agent` sets up one of the user's named agents (not a chat): `agent` by id or exact name, and any of `name`, `description`, `instructions`, `section` (id or exact name, or null), `projects` (project ids, first is its default), `fallbacks` (up to 4 `{model, effort}`, model ids and levels from `lookout_models`), `notify`, `showWork`. Only the fields you pass change. Moving into a Lookout agent means writing the instructions it lives by, binding its projects, and setting its fallbacks in one call.
+
+- It needs the user's per-client permission on that machine, off by default. A refusal is `grant_needed`, and `setting` names the place (`Settings > App access > Configure agents > <client>`). Ask the user to allow it there, then call again.
+- Limits, allowed models, pause, lock, memory switches and full autonomy are the user's in the app: the tool cannot set them, and the server refuses them to terminal and MCP callers alike.
+- Every change is attributed to this client (the agent's transcript notice and the action log name it). Set an agent up the way the user asked, no further.
+
 ## Collect
 
 `lookout_fleet` with the thread ids, `brief: false` when you need the replies. `lane.lastReply.text` is the answer. `lane.error` says whether a failure is worth retrying, and `lane.error.next` is the call.
 
 A lane key finds its chat: `lookout_fleet` with `lane`.
 
+## Before the session ends: hand chats off
+
+A chat you started that still matters when this session ends would be left with nobody watching it. Hand it to a Lookout agent with `lookout_handoff {threadIds, agent}` (or `lanePrefix` for a batch; `machine` when the chats live elsewhere): the agent hears each one once it settles, steers it, and reports to the user. You hand only chats your client started, on another machine too when you started them there from this device; `not_yours` means another client's (or one no client attested starting), which only the user hands (the chat's menu, Hand to, or Hand by lane prefix for a batch). The lanes then carry `handedTo`; your own `lookout_steer` still reaches them, as the user's message, so tell the agent rather than steering past it.
+
 A worktree chat's branch is in `lookout_check` `reply.git`. Land it with `lookout_merge_worktree` (into that machine's checkout) or `lookout_push_worktree` (to the remote, then fetch it here).
 
 The lookout repo lands a remote chat's work from this Mac: the chat pushes its branch (`lookout_push_worktree`), then you, or a Mac-side chat, runs `bun scripts/ship.ts --branch <branch>` from any checkout. That fetches the branch, checks it in a throwaway worktree of its own and queues it like a lane ship; it refuses in one line (nonzero exit) when origin has no such branch, its tip is already on main, or the check is red, and exits 2 when the branch does not merge into main (merge origin/main into it, push, and run it again). `bun scripts/ship.ts --status <id>` reads the outcome.
+
+## Lanes in the lookout repo
+
+Make the lane, then delegate into it. From the owner checkout, `bun scripts/lane.ts new <name>`; its last line is `delegate into: workspace <tree>`. Then `lookout_delegate {workspace: "<tree>", lane: "<name>", prompt, ...}`, without `worktree: true` (lane.ts made the tree). The chat joins the lookout project with the tree as its folder, so its Shell, Read, Grep, rules, checkpoints, Changes and Task workers all work there. The work order says the chat's folder is its lane tree, and that the chat never runs `lane.ts new` itself, except `lane.ts new <name> --branch <branch>` to take back a red. Its first `ship.ts` records it as the lane's owner, so the landing's outcome comes back to it.
+
+A red that wakes the chat after its `lane.ts done` removed the tree runs that turn in the project folder, and the turn says so. The chat takes the lane back there with `lane.ts new <name> --branch <branch>`, which puts the tree at the same path, and its next turn runs in the tree again.
 
 ## Landings in the lookout repo
 
