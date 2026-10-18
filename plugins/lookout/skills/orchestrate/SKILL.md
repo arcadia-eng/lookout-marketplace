@@ -15,11 +15,12 @@ Lookout chats are the workers. You are the outer agent. The tools are on the `lo
 
 ## Delegate
 
-`lookout_delegate` takes `prompt`, and optionally `workspace`, `projectId`, `title`, `model`, `effort`, `machine`, `lane`, `ephemeral`, `onQuota`, `fallbacks`, `schema`.
+`lookout_delegate` takes `prompt`, and optionally `workspace`, `projectId`, `title`, `model`, `effort`, `multitask`, `machine`, `lane`, `ephemeral`, `onQuota`, `fallbacks`, `schema`.
 
 - `title` is the chat's row in the sidebar: 2 to 6 words, at most 40 characters ("Fix the login redirect"). The goal goes in the prompt. A longer title is not used: the chat titles itself from its first exchange and the answer's `titleNote` says why. A `lookout_configure` rename over 40 characters is refused (`title_too_long`) and nothing in the call changes. Omit it and Lookout titles the chat.
 
 - Omit `model` and `effort` unless the user named them or the models skill picked one. The server default is the right default.
+- Pass `multitask: false` for one line of work: most delegates, and every lane of a scan plan. The chat does the work itself and can still start Task workers. `multitask: true` makes the chat a coordinator over background workers that cannot delegate, so one line of work pays for three model layers reading the same brief, and each part costs a worker exit, a coordinator round and a resume. Pass true only when the work has two or more parts that can run at the same time in separate contexts. Omitted, it follows the project's setting, which may be on.
 - Omit `machine` for this machine. Pass a name from `lookout_machines` to run elsewhere, or `"auto"` when the user wants the load spread (the `vps-workers` skill). An explicit `machine` on one call does not change the session pick.
 - Several chats in one repository: `worktree: true` on each, so they never edit the same checkout. `repo` clones the repository onto the target machine first.
 - `ephemeral: true` is a throwaway scratch chat. Leave it off when the user should find the chat in the sidebar.
@@ -97,7 +98,7 @@ The lookout repo lands a remote chat's work from this Mac: the chat pushes its b
 
 ## Lanes in the lookout repo
 
-Make the lane, then delegate into it. From the owner checkout, `bun scripts/lane.ts new <name>`; its last line is `delegate into: workspace <tree>`. Then `lookout_delegate {workspace: "<tree>", lane: "<name>", prompt, ...}`, without `worktree: true` (lane.ts made the tree). The chat joins the lookout project with the tree as its folder, so its Shell, Read, Grep, rules, checkpoints, Changes and Task workers all work there. The work order says the chat's folder is its lane tree, and that the chat never runs `lane.ts new` itself, except `lane.ts new <name> --branch <branch>` to take back a red. Its first `ship.ts` records it as the lane's owner, so the landing's outcome comes back to it.
+Make the lane, then delegate into it. From the owner checkout, `bun scripts/lane.ts new <name>`; its last line is `delegate into: workspace <tree>`. Then `lookout_delegate {workspace: "<tree>", lane: "<name>", multitask: false, prompt, ...}`, without `worktree: true` (lane.ts made the tree), and with `multitask: true` only when the brief has parts that run at the same time ("Delegate", above). The chat joins the lookout project with the tree as its folder, so its Shell, Read, Grep, rules, checkpoints, Changes and Task workers all work there. The work order says the chat's folder is its lane tree, and that the chat never runs `lane.ts new` itself, except `lane.ts new <name> --branch <branch>` to take back a red. Its first `ship.ts` records it as the lane's owner, so the landing's outcome comes back to it.
 
 A red that wakes the chat after its `lane.ts done` removed the tree runs that turn in the project folder, and the turn says so. The chat takes the lane back there with `lane.ts new <name> --branch <branch>`, which puts the tree at the same path, and its next turn runs in the tree again.
 
