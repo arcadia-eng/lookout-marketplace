@@ -49,6 +49,30 @@ Monitor, `timeout_ms` 1740000, `persistent` false (or run it as a background com
 - One chat only: `--thread <id>`.
 - The watcher needs the local app. On the hosted MCP with no local app, block on `lookout_fleet {waitSeconds}` instead.
 
+A settle line carries the reply's first line and its closing paragraph (`done: <first line> … <closing paragraph>`), so a `queued <id>` or a conclusion at the end of a long report reaches you. A done whose reply has a paragraph starting "Decision for the lead:" is `done, asks: <that paragraph>`: answer it with `lookout_steer`. A done whose newest turn was its landing notice is `landed #<pr>`, not a second done.
+
+## Following everything you lead: one watcher
+
+A lead that keeps many lanes, an agent chat (a Chief of Staff) and anything else going arms one follow watcher instead of a batch watcher per batch:
+
+```bash
+sh "${CLAUDE_PLUGIN_ROOT}/scripts/bun.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/watch.ts" --follow --lane-prefix lead- --thread <agent chat id>
+```
+
+`--lane-prefix` and `--thread` repeat, agent chats included. It prints the same lines as the batch watcher, never exits on a settle, a question or a quiet fleet, and keeps its cursor and marks in the plugin's data folder (`follow.json`; `--cursor <file>` puts them elsewhere), so arming it again tells nothing twice; a filter you add tells what a person waits on and what settled in the last 15 minutes, not older history. Monitor still ends it at 30 minutes (`timeout_ms` 1740000): it prints one line saying so, and you arm the same command again.
+
+A session that should hear its chats with no watcher at all starts with the `lookout` channel (a Claude Code research preview: a warning dialog at each start, interactive sessions only):
+
+```bash
+LOOKOUT_CHANNEL=1 claude --dangerously-load-development-channels plugin:lookout@lookout-marketplace
+```
+
+The same lines then arrive as `<channel source="lookout" thread_id=… state=… lane=…>` events, for the chats this session delegates and for what `channel.json` in the plugin's data folder (`${CLAUDE_PLUGIN_DATA}`) names: `{"lanePrefixes": ["lead-"], "threads": ["<agent chat id>"]}`, read again when it changes. Act on them with the lookout tools; there is nothing to reply to and nothing to re-arm. Without the channel, follow mode is the way.
+
+## Work orders that leave a decision
+
+End every work order with: "Put a decision you need from me in a closing paragraph that starts `Decision for the lead:`; use AskQuestion only when you cannot go on without the answer." The watcher turns that paragraph into an `asks` line, and the chat finishes its turn instead of blocking on a question nobody may be watching.
+
 ## Workflow runs
 
 When the `lookout` server lists `lookout_run_workflow` (the user turned workflow runs on in Lookout), staged programs of agents run in Lookout: a Claude Code workflow script mostly runs unchanged. Read `workflows.md` in this skill's folder before the first launch: what to change in a script, launching from a host chat, the watcher, answers, resume, and model picks.
@@ -76,10 +100,10 @@ Project folders: `lookout_configure_project {projectId, folders: [primary, ...ex
 
 ## Agents
 
-`lookout_configure_agent` sets up one of the user's named agents (not a chat): `agent` by id or exact name, and any of `name`, `description`, `instructions`, `section` (id or exact name, or null), `projects` (project ids, first is its default), `fallbacks` (up to 4 `{model, effort}`, model ids and levels from `lookout_models`), `notify`, `showWork`. Only the fields you pass change. Moving into a Lookout agent means writing the instructions it lives by, binding its projects, and setting its fallbacks in one call.
+`lookout_configure_agent` sets up one of the user's named agents (not a chat): `agent` by id or exact name, and any of `name`, `description`, `instructions` (they replace `AGENTS.md` in its home), `section` (id or exact name, or null), `projects` (project ids, first is its default), `fallbacks` (up to 4 `{model, effort}`, model ids and levels from `lookout_models`), `showWork`. Only the fields you pass change. Moving into a Lookout agent means writing the instructions it lives by, binding its projects, and setting its fallbacks in one call.
 
 - It needs the user's per-client permission on that machine, off by default. A refusal is `grant_needed`, and `setting` names the place (`Settings > App access > Configure agents > <client>`). Ask the user to allow it there, then call again.
-- Limits, allowed models, pause, lock, memory switches and full autonomy are the user's in the app: the tool cannot set them, and the server refuses them to terminal and MCP callers alike.
+- Limits, allowed models, pause, lock and memory switches are the user's in the app: the tool cannot set them, and the server refuses them to terminal and MCP callers alike.
 - Every change is attributed to this client (the agent's transcript notice and the action log name it). Set an agent up the way the user asked, no further.
 
 ## Collect

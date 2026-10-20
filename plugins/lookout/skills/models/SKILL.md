@@ -8,8 +8,8 @@ description: Pick a Lookout model from provider quotas. Use when the user wants 
 The canonical document is `GET /api/providers` on the local Lookout app (`http://127.0.0.1:8789/api/providers`, or `LOOKOUT_URL`), with the header `x-lookout-session: <the contents of ~/.lookout/app-session.key>` (the app answers no request without it). One shape for every provider: `connection`, `plan`, `meters` (`leftPercent`, `exhausted`, `resetsAt`), `metered`, `accounts`. No tokens, no keys.
 
 - `?refresh=none` reads the local snapshot and does not dial the providers.
-- The default re-reads what is stale.
-- `?refresh=force` re-reads every signed-in account's windows now.
+- The default answers from the last reading at once (each meter carries its `observedAt`) and re-reads what is stale behind the answer.
+- `?refresh=stale` waits on that re-read; `?refresh=force` waits on a re-read of every signed-in account's windows now. Use one when the choice decides on the number.
 
 `lookout_usage` is that same read, trimmed to what a run decides on (`connection`, windows, `leftPercent`, `resetsAt`). Prefer it. Fetch the raw document only when you need accounts, custody, or the credential's kind (the route does not send a secret).
 

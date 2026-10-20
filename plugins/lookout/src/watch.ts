@@ -43,6 +43,13 @@ export interface LaneSnap {
   watches?: readonly unknown[];
   /** State parked: the model whose plan it waits for, and the reset (the lane's `parked`). */
   parked?: { until?: number; model?: string };
+  /** The lane's `lastReply.truncated`: `lastReply` is the head and tail excerpt, a read by id has the whole text. */
+  replyCut?: boolean;
+  /** The lane's `landed`: its newest turn was the landing notice of a ship it queued (the report stays `lastReply`). */
+  landed?: { pr: number; merge?: string; at?: number };
+  /** The lane key and the chat's last activity (the lane's `lane` and `updatedAt`). */
+  lane?: string;
+  updatedAt?: number;
 }
 
 /** States that still need the watcher to stay open. */
@@ -82,40 +89,111 @@ export interface WatchExtras {
 }
 
 const isoMinute = (ms: number) => `${new Date(ms).toISOString().slice(0, 16)}Z`;
-const replyTail = (reply?: string, chars = 240) => {
-  const t = reply?.trim();
+const errTail = (text?: string, chars = 240) => {
+  const t = text?.trim();
   return t ? `: ${t.slice(0, chars)}` : "";
 };
+
+/** The first line's share of a settle line, and the closing paragraph's (whole sentences). */
+export const GIST_FIRST = 200;
+export const GIST_CLOSING = 600;
+/** The lanes excerpt's cut (src/server/lanes.ts excerpt): head, this marker, tail. */
+const OMITTED = /\n…\[\d+ chars omitted\]…\n/;
+/** The convention the orchestrate skill gives work orders: a closing paragraph the lead must answer. */
+const DECISION = /^[*_#>\s]*decision for the lead\s*:\s*(?:\*\*|__)?\s*/i;
+
+const flat = (s: string) => s.replace(/\s+/g, " ").trim();
+
+/** Whole sentences from the start of `text` within `max` characters; a first sentence longer than that is cut at a word. */
+export function sentencesWithin(text: string, max: number): string {
+  const t = flat(text);
+  if (t.length <= max) return t;
+  const ends = [...t.matchAll(/[.!?](?=\s|$)/g)].map(m => m.index! + 1).filter(i => i <= max);
+  if (ends.length) return t.slice(0, ends.at(-1));
+  const space = t.lastIndexOf(" ", max - 1);
+  return `${t.slice(0, space > max / 2 ? space : max - 1)}…`;
+}
+
+export interface ReplyGist {
+  /** The reply's first line. */
+  first: string;
+  /** Its closing paragraph; the same text as `first` for a reply of one paragraph. */
+  closing: string;
+  /** A paragraph near the end that starts "Decision for the lead:", without that label. */
+  decision?: string;
+}
+
+/** What a settle line carries of a reply: its first line and its closing paragraph, or the decision it leaves the lead. */
+export function replyGist(reply?: string): ReplyGist | null {
+  const t = reply?.trim();
+  if (!t) return null;
+  const cut = OMITTED.exec(t);
+  const head = cut ? t.slice(0, cut.index) : t;
+  const paras = (cut ? t.slice(cut.index + cut[0].length) : t).split(/\n\s*\n/).map(p => p.trim()).filter(Boolean);
+  // the excerpt's tail starts inside a paragraph: drop the sentence it cut
+  const at = cut && paras.length ? paras[0]!.search(/[.!?]\s/) : -1;
+  if (at >= 0) paras[0] = paras[0]!.slice(at + 2).trim();
+  const firstLine = (head.split("\n").map(l => l.trim()).find(Boolean) ?? "").replace(/^[#>*\s]+/, "").replace(/\*\*/g, "");
+  const first = sentencesWithin(firstLine, GIST_FIRST);
+  const closing = sentencesWithin(paras.at(-1) || firstLine, GIST_CLOSING);
+  const asked = [...paras].reverse().find(p => DECISION.test(p));
+  return { first, closing, ...(asked ? { decision: sentencesWithin(asked.replace(DECISION, ""), GIST_CLOSING) } : {}) };
+}
+
+/** `: <first line> … <closing paragraph>`, or the one of them a short reply has. */
+function gistTail(reply?: string): string {
+  const g = replyGist(reply);
+  if (!g) return "";
+  if (!g.first || g.closing.startsWith(g.first.replace(/…$/, ""))) return `: ${g.closing}`;
+  return `: ${g.first} … ${g.closing}`;
+}
+
+/** What a watch line says, for a reader that routes on it (the channel's meta `state`). */
+export type WatchKind =
+  | "parked" | "needs_input" | "workflow_asks" | "quota" | "open-todos" | "incomplete" | "asks" | "landed"
+  | "done" | "failed" | "stopped" | "interrupted" | "gone" | (string & {});
+
+export interface WatchEvent { threadId: string; line: string; kind: WatchKind; machine?: string; lane?: string }
 
 /**
  * A line for Monitor, or null to keep waiting. `needs_input` and a workflow
  * ask are lines: someone has to answer, and waiting further would hide that.
  * A quota wall names when the plan resets; a chat that waits for its plan
  * says whose and until when (the watcher prints it and keeps watching:
- * rowWaitsForPlan); every other settle carries the reply's opening.
+ * rowWaitsForPlan); every other settle carries the reply's first line and its
+ * closing paragraph. A done that closes on "Decision for the lead:" is an
+ * `asks` line, and a done whose newest turn was its landing notice says the PR.
  */
-export function watchLine(threadId: string, lane: LaneSnap | null, x: WatchExtras = {}): string | null {
+export function watchEvent(threadId: string, lane: LaneSnap | null, x: WatchExtras = {}): Omit<WatchEvent, "threadId"> | null {
   if (!lane) return null;
   const title = lane.title?.trim() || threadId;
   const at = `${x.machine ? `${x.machine}: ` : ""}${title} (${threadId})`;
+  const say = (kind: WatchKind, line: string) => ({ kind, line: `[lookout] ${at} ${line}`, ...(x.machine ? { machine: x.machine } : {}), ...(lane.lane ? { lane: lane.lane } : {}) });
   if (lane.state === "parked" && !lane.live) {
     const plan = lane.parked?.model ? `${lane.parked.model}'s plan` : "its plan";
-    return `[lookout] ${at} waiting for ${plan}${lane.parked?.until ? ` until ${isoMinute(lane.parked.until)}` : ""}`;
+    return say("parked", `waiting for ${plan}${lane.parked?.until ? ` until ${isoMinute(lane.parked.until)}` : ""}`);
   }
   if (lane.state === "needs_input") {
     const q = lane.question?.trim();
-    return q ? `[lookout] ${at} needs input: ${q}` : `[lookout] ${at} needs input`;
+    return say("needs_input", q ? `needs input: ${q}` : "needs input");
   }
-  if ((x.asking ?? 0) > 0) return `[lookout] ${at} workflow asks (${x.asking} open)`;
+  if ((x.asking ?? 0) > 0) return say("workflow_asks", `workflow asks (${x.asking} open)`);
   if (lane.working || lane.live || OPEN.has(lane.state)) return null;
   if (lane.state === "quota") {
     const resets = x.resetsAt ? ` (resets ${isoMinute(x.resetsAt)})` : "";
-    return `[lookout] ${at} quota${resets}${replyTail(lane.lastReply)}`;
+    return say("quota", `quota${resets}${gistTail(lane.lastReply)}`);
   }
   const todos = laneOpenTodos(lane);
-  if (todos) return `[lookout] ${at} ${openTodosLine(todos.count)}${replyTail(todos.lastLine || lane.lastReply)}`;
-  if (lane.state === "incomplete") return `[lookout] ${at} incomplete: ${incompleteHow(lane.lastStopReason)}${replyTail(lane.lastReply)}`;
-  return `[lookout] ${at} ${lane.state}${replyTail(lane.lastReply)}`;
+  if (todos) return say(OPEN_TODOS, `${openTodosLine(todos.count)}${gistTail(todos.lastLine || lane.lastReply)}`);
+  if (lane.state === "incomplete") return say("incomplete", `incomplete: ${incompleteHow(lane.lastStopReason)}${gistTail(lane.lastReply)}`);
+  if (lane.state === "done" && lane.landed) return say("landed", `landed #${lane.landed.pr}`);
+  const decision = lane.state === "done" ? replyGist(lane.lastReply)?.decision : undefined;
+  if (decision) return say("asks", `done, asks: ${decision}`);
+  return say(lane.state, `${lane.state}${gistTail(lane.lastReply)}`);
+}
+
+export function watchLine(threadId: string, lane: LaneSnap | null, x: WatchExtras = {}): string | null {
+  return watchEvent(threadId, lane, x)?.line ?? null;
 }
 
 /** A chat as the fleet step keeps it: a lane plus what hides inside its state. */
@@ -140,9 +218,10 @@ export function rowOpen(row: FleetRow): boolean {
   return !SETTLED.has(row.state);
 }
 
-/** The mark a fleet read keeps of a chat: its state, a workflow ask, an open-todos settle, a crash resume. */
+/** The mark a fleet read keeps of a chat: its state, a workflow ask, an open-todos settle, a landing, a crash resume. */
 export function rowMark(row: FleetRow): string {
-  return `${row.state}${(row.asking ?? 0) > 0 ? "+asking" : ""}${laneOpenTodos(row) ? "+todos" : ""}${row.crashResume ? `~${row.crashResume}` : ""}`;
+  const landed = row.state === "done" && row.landed ? `+landed${row.landed.pr}` : "";
+  return `${row.state}${(row.asking ?? 0) > 0 ? "+asking" : ""}${laneOpenTodos(row) ? "+todos" : ""}${landed}${row.crashResume ? `~${row.crashResume}` : ""}`;
 }
 
 /** A mark back to whether the batch still waits on that chat. */
@@ -157,6 +236,8 @@ export function markOpen(mark: string): boolean {
 export interface FleetStep {
   /** One line per event since the previous read, in the read's row order. */
   lines: string[];
+  /** The same lines with the chat and what each says. */
+  events: WatchEvent[];
   /** Every chat this read matched (the next read's `before`). */
   marks: Map<string, string>;
   /** Chats the batch still waits on (in flight or blocked on a person). */
@@ -176,7 +257,7 @@ export interface FleetStep {
  */
 export function fleetStep(rows: FleetRow[], before: Map<string, string>, x: { machine?: string; complete?: boolean } = {}): FleetStep {
   const marks = new Map<string, string>();
-  const lines: string[] = [];
+  const events: WatchEvent[] = [];
   let open = 0;
   let answers = 0;
   for (const row of rows) {
@@ -186,26 +267,29 @@ export function fleetStep(rows: FleetRow[], before: Map<string, string>, x: { ma
       if (rowOpen(row)) open++;
       continue;
     }
-    const line = watchLine(row.threadId, row, { asking: row.asking, resetsAt: row.resetsAt, machine: x.machine });
+    const got = watchEvent(row.threadId, row, { asking: row.asking, resetsAt: row.resetsAt, machine: x.machine });
+    const ev = got ? { threadId: row.threadId, ...got } : null;
     if (rowWaitsOnPerson(row)) {
       open++;
-      if (line) { lines.push(line); answers++; }
+      if (ev) { events.push(ev); answers++; }
       continue;
     }
     // waiting for its plan: one line, and the batch still waits on it (it goes on by itself)
-    if (rowWaitsForPlan(row)) { open++; if (line) lines.push(line); continue; }
+    if (rowWaitsForPlan(row)) { open++; if (ev) events.push(ev); continue; }
     if (rowOpen(row)) { open++; continue; }
-    if (line) lines.push(line);
+    if (ev) { events.push(ev); if (ev.kind === "asks") answers++; }
   }
   if (x.complete !== false) {
-    const scope = x.machine ? `${x.machine}: ` : "";
     for (const [id, mark] of before) {
       if (marks.has(id)) continue;
-      if (markOpen(mark)) lines.push(`[lookout] ${scope}${id} left the fleet (archived or deleted)`);
+      if (markOpen(mark)) events.push(goneEvent(id, x.machine));
     }
   }
-  return { lines, marks, open, answers };
+  return { lines: events.map(e => e.line), events, marks, open, answers };
 }
+
+const goneEvent = (id: string, machine?: string): WatchEvent =>
+  ({ threadId: id, kind: "gone", line: `[lookout] ${machine ? `${machine}: ` : ""}${id} left the fleet (archived or deleted)`, ...(machine ? { machine } : {}) });
 
 /** The line that ends a settled batch: one count per state it settled into (an open-todos settle counts its own). */
 export function fleetSummary(rows: FleetRow[], machines = 1): string {
@@ -313,46 +397,52 @@ const atId = (id: string, machine?: string) => `${machine ? `${machine}: ` : ""}
  * A settle the page cut off. The cursor has the state and not the reply; the line still names the chat, once.
  * A question, a workflow ask and `interrupted` are not here: those lanes are read whole.
  */
-export function offPageLines(before: Map<string, string>, off: Map<string, string>, machine?: string): string[] {
-  const lines: string[] = [];
+export const offPageLines = (before: Map<string, string>, off: Map<string, string>, machine?: string): string[] =>
+  offPageEvents(before, off, machine).map(e => e.line);
+
+export function offPageEvents(before: Map<string, string>, off: Map<string, string>, machine?: string): WatchEvent[] {
+  const out: WatchEvent[] = [];
   for (const [id, mark] of off) {
     if (before.get(id) === mark) continue;
     const state = markState(mark);
     if (!state || state === "interrupted" || state === "parked" || markOpen(mark)) continue;
-    lines.push(`[lookout] ${atId(id, machine)} ${state}`);
+    out.push({ threadId: id, kind: state, line: `[lookout] ${atId(id, machine)} ${state}`, ...(machine ? { machine } : {}) });
   }
-  return lines;
+  return out;
 }
 
 /**
  * A person is waiting on a chat the page cut off and the detail read did not return. The watcher exits on it,
  * the same as a question on the page; the line has no question text because the cursor does not carry one.
  */
-export function offPageAnswers(before: Map<string, string>, off: Map<string, string>, machine?: string): string[] {
-  const lines: string[] = [];
+export const offPageAnswers = (before: Map<string, string>, off: Map<string, string>, machine?: string): string[] =>
+  offPageAnswerEvents(before, off, machine).map(e => e.line);
+
+export function offPageAnswerEvents(before: Map<string, string>, off: Map<string, string>, machine?: string): WatchEvent[] {
+  const out: WatchEvent[] = [];
+  const at = (id: string, kind: WatchKind, said: string) => out.push({ threadId: id, kind, line: `[lookout] ${atId(id, machine)} ${said}`, ...(machine ? { machine } : {}) });
   for (const [id, mark] of off) {
     if (before.get(id) === mark) continue;
     const state = markState(mark);
-    if (state === "needs_input") lines.push(`[lookout] ${atId(id, machine)} needs input`);
-    else if (mark.includes("+asking")) lines.push(`[lookout] ${atId(id, machine)} workflow asks`);
+    if (state === "needs_input") at(id, "needs_input", "needs input");
+    else if (mark.includes("+asking")) at(id, "workflow_asks", "workflow asks");
   }
-  return lines;
+  return out;
 }
 
 /**
  * A chat the previous read was still waiting on, now in neither the page nor the cursor: archived or deleted.
  * One that had already settled is not named; its line already went out. `cursor` is this read's matched set.
  */
-export function fleetGone(before: Map<string, string>, rows: FleetRow[], cursor: Map<string, string>, machine?: string): string[] {
-  const scope = machine ? `${machine}: ` : "";
+export const fleetGone = (before: Map<string, string>, rows: FleetRow[], cursor: Map<string, string>, machine?: string): string[] =>
+  fleetGoneEvents(before, rows, cursor, machine).map(e => e.line);
+
+export function fleetGoneEvents(before: Map<string, string>, rows: FleetRow[], cursor: Map<string, string>, machine?: string): WatchEvent[] {
   const seen = new Set(rows.map(r => r.threadId));
   for (const id of cursor.keys()) seen.add(id);
-  const lines: string[] = [];
-  for (const [id, mark] of before) {
-    if (seen.has(id) || !markOpen(mark)) continue;
-    lines.push(`[lookout] ${scope}${id} left the fleet (archived or deleted)`);
-  }
-  return lines;
+  const out: WatchEvent[] = [];
+  for (const [id, mark] of before) if (!seen.has(id) && markOpen(mark)) out.push(goneEvent(id, machine));
+  return out;
 }
 
 /** A workflow run as the watcher keeps it (scripts/watch.ts narrows the server's JSON). */
@@ -430,7 +520,7 @@ export function runStep(snap: RunSnap, before: string | null, machine?: string):
     return { line: q ? `[lookout] ${at} asks: ${q}` : `[lookout] ${at} asks`, mark, exit: true };
   }
   if (RUN_ENDS.has(snap.state)) {
-    const why = snap.state === "failed" && snap.error ? replyTail(snap.error) : "";
+    const why = snap.state === "failed" && snap.error ? errTail(snap.error) : "";
     return { line: `[lookout] ${at} ${snap.state}${why}`, mark, exit: true };
   }
   if (snap.state === "paused") return { line: `[lookout] ${at} paused`, mark, exit: true };
@@ -460,6 +550,29 @@ export function deadlineLine(threadId: string): string {
 /** The re-arm line at the deadline for a run (on `machine` when it isn't this one). */
 export function runDeadline(snap: RunSnap, machine?: string): string {
   return `[lookout] ${machine ? `${machine}: ` : ""}run ${snap.name || snap.runId} (${snap.runId}) still ${snap.state}. Arm the watcher again.`;
+}
+
+/**
+ * The one line a follow watcher prints when Monitor's cap ends it: what it still follows, and that nothing it saw
+ * is told twice when it is armed again with the same filters.
+ */
+export function followDeadline(rows: FleetRow[], filters: string): string {
+  const counts = new Map<string, number>();
+  for (const r of rows) if (rowOpen(r) || rowWaitsForPlan(r)) counts.set(r.state, (counts.get(r.state) ?? 0) + 1);
+  const going = [...counts.entries()].map(([s, n]) => `${n} ${s}`).join(", ");
+  return `[lookout] follow (${filters}) reached Monitor's 30 minute cap${going ? ` with ${going}` : ""}: arm the same command again; nothing it told is told twice.`;
+}
+
+/**
+ * Chats a follow watcher sees for the first time, its filter just added: the ones a person waits on, and the ones that
+ * settled within this long, are told; older settles are history, not news.
+ */
+export const FOLLOW_RECENT_MS = 15 * 60_000;
+
+export function primeNews(row: FleetRow, now: number): boolean {
+  if (rowWaitsOnPerson(row)) return true;
+  if (rowOpen(row)) return false;
+  return typeof row.updatedAt === "number" && now - row.updatedAt <= FOLLOW_RECENT_MS;
 }
 
 /** Skip a line the previous arm already printed. */

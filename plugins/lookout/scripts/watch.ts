@@ -10,18 +10,26 @@
 //   bun scripts/watch.ts --fleet --lane-prefix p [--machines a,b | "*"]      a batch by lane-key prefix
 //   bun scripts/watch.ts --machine <name> [--lane-prefix p]                  one remote machine's batch
 //   bun scripts/watch.ts --run <wfr_id> [--machine <name>]                   one workflow run (this machine, or that one)
+//   bun scripts/watch.ts --follow [--lane-prefix p]... [--thread <id>]...    everything a lead follows, in one process
 //
 // Every mode takes --url <lookout> (LOOKOUT_URL), --cursor <file> (what the
 // last arm saw, so a re-arm prints no event twice) and --until all-settled
 // (the only exit mode; it is the default).
+//
+// --follow never exits on a settle or a question: it prints the same lines
+// for every filter until Monitor's cap, then one line saying so. Its cursor
+// and marks default to follow.json in the plugin's data folder. --json prints
+// each event as {content, meta}; --forever has no cap and ends when stdin
+// closes (the bridge's channel runs it that way).
 
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { dirname } from "node:path";
+import { dirname, join } from "node:path";
+import { pluginDataDir } from "../src/data-dir.js";
 import { CLIENT_HEADER, HOLD_HEADER, localGet, machineBase, sessionHeaders } from "../src/local.js";
 import {
-  deadlineLine, decodeFleetCursor, fleetDeadline, fleetGone, fleetPageSettled, fleetStep, fleetSummary, fleetSummaryRows,
-  offPageAnswers, offPageLines, offPageMarks, offPageNeedsDetail, runDeadline, runStep, rowWaitsForPlan, takeSseEvents, unseen,
-  WATCH_MAX_MS, watchLine, type FleetRow, type LaneSnap, type RunSnap,
+  deadlineLine, decodeFleetCursor, fleetDeadline, fleetGoneEvents, fleetPageSettled, fleetStep, fleetSummary, fleetSummaryRows,
+  followDeadline, offPageAnswerEvents, offPageEvents, offPageMarks, offPageNeedsDetail, primeNews, rowMark, rowOpen, runDeadline, runStep,
+  rowWaitsForPlan, takeSseEvents, unseen, WATCH_MAX_MS, watchLine, type FleetRow, type LaneSnap, type RunSnap, type WatchEvent,
 } from "../src/watch.js";
 
 /** The server's longest hold for a lanes or run wait. */
@@ -44,9 +52,42 @@ function flag(argv: readonly string[], name: string): string | null {
   return argv[at + 1] ?? null;
 }
 
+/** Every value a repeatable flag was given. */
+function flags(argv: readonly string[], name: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) if (argv[i] === name && argv[i + 1] !== undefined) out.push(argv[++i]!);
+  return out;
+}
+
 function usage(message: string): never {
   console.error(`watch: ${message}`);
   process.exit(2);
+}
+
+/** One lane of GET /api/lanes, narrowed to what the lines say. */
+function snapOf(row: Record<string, unknown>): LaneSnap | null {
+  if (typeof row.state !== "string") return null;
+  const question = row.question && typeof row.question === "object" ? (row.question as { title?: unknown }).title : undefined;
+  const reply = row.lastReply && typeof row.lastReply === "object" ? row.lastReply as { text?: unknown; truncated?: unknown } : null;
+  const parked = parkedOf(row.parked);
+  const openTodos = openTodosOf(row.openTodos);
+  const landed = landedOf(row.landed);
+  return {
+    state: row.state,
+    live: row.live === true,
+    working: row.working === true,
+    ...(typeof row.title === "string" ? { title: row.title } : {}),
+    ...(typeof question === "string" ? { question } : {}),
+    ...(typeof reply?.text === "string" ? { lastReply: reply.text, ...(reply.truncated === true ? { replyCut: true } : {}) } : {}),
+    ...(typeof row.lastStopReason === "string" ? { lastStopReason: row.lastStopReason } : {}),
+    ...(openTodos ? { openTodos } : {}),
+    ...(Array.isArray(row.shells) && row.shells.length ? { shells: row.shells } : {}),
+    ...(Array.isArray(row.watches) && row.watches.length ? { watches: row.watches } : {}),
+    ...(parked ? { parked } : {}),
+    ...(landed ? { landed } : {}),
+    ...(typeof row.lane === "string" && row.lane ? { lane: row.lane } : {}),
+    ...(typeof row.updatedAt === "number" ? { updatedAt: row.updatedAt } : {}),
+  };
 }
 
 function laneOf(body: unknown, threadId: string): LaneSnap | null {
@@ -54,24 +95,15 @@ function laneOf(body: unknown, threadId: string): LaneSnap | null {
   const lanes = (body as { lanes?: unknown }).lanes;
   if (!Array.isArray(lanes)) return null;
   const row = lanes.find(l => !!l && typeof l === "object" && (l as { threadId?: string }).threadId === threadId) as Record<string, unknown> | undefined;
-  if (!row || typeof row.state !== "string") return null;
-  const question = row.question && typeof row.question === "object" ? (row.question as { title?: unknown }).title : undefined;
-  const last = row.lastReply && typeof row.lastReply === "object" ? (row.lastReply as { text?: unknown }).text : undefined;
-  const parked = parkedOf(row.parked);
-  const openTodos = openTodosOf(row.openTodos);
-  return {
-    state: row.state,
-    live: row.live === true,
-    working: row.working === true,
-    ...(typeof row.title === "string" ? { title: row.title } : {}),
-    ...(typeof question === "string" ? { question } : {}),
-    ...(typeof last === "string" ? { lastReply: last } : {}),
-    ...(typeof row.lastStopReason === "string" ? { lastStopReason: row.lastStopReason } : {}),
-    ...(openTodos ? { openTodos } : {}),
-    ...(Array.isArray(row.shells) && row.shells.length ? { shells: row.shells } : {}),
-    ...(Array.isArray(row.watches) && row.watches.length ? { watches: row.watches } : {}),
-    ...(parked ? { parked } : {}),
-  };
+  return row ? snapOf(row) : null;
+}
+
+/** A lane's `landed` (the PR its landing notice named), narrowed. */
+function landedOf(v: unknown): LaneSnap["landed"] | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const l = v as { pr?: unknown; merge?: unknown; at?: unknown };
+  if (typeof l.pr !== "number") return undefined;
+  return { pr: l.pr, ...(typeof l.merge === "string" ? { merge: l.merge } : {}), ...(typeof l.at === "number" ? { at: l.at } : {}) };
 }
 
 /** A lane's `parked` (whose plan it waits for, until when), narrowed. */
@@ -155,25 +187,12 @@ function fleetRowsOf(body: unknown): { rows: FleetRow[]; cursor?: string; nextPa
   for (const l of lanes) {
     if (!l || typeof l !== "object") continue;
     const r = l as Record<string, unknown>;
-    if (typeof r.threadId !== "string" || typeof r.state !== "string") continue;
-    const question = r.question && typeof r.question === "object" ? (r.question as { title?: unknown }).title : undefined;
-    const last = r.lastReply && typeof r.lastReply === "object" ? (r.lastReply as { text?: unknown }).text : undefined;
+    const snap = snapOf(r);
+    if (typeof r.threadId !== "string" || !snap) continue;
     const resetsAt = r.error && typeof r.error === "object" ? (r.error as { resetsAt?: unknown }).resetsAt : undefined;
-    const parked = parkedOf(r.parked);
-    const openTodos = openTodosOf(r.openTodos);
     rows.push({
-      ...(parked ? { parked } : {}),
+      ...snap,
       threadId: r.threadId,
-      state: r.state,
-      live: r.live === true,
-      working: r.working === true,
-      ...(typeof r.title === "string" ? { title: r.title } : {}),
-      ...(typeof question === "string" ? { question } : {}),
-      ...(typeof last === "string" ? { lastReply: last } : {}),
-      ...(typeof r.lastStopReason === "string" ? { lastStopReason: r.lastStopReason } : {}),
-      ...(openTodos ? { openTodos } : {}),
-      ...(Array.isArray(r.shells) && r.shells.length ? { shells: r.shells } : {}),
-      ...(Array.isArray(r.watches) && r.watches.length ? { watches: r.watches } : {}),
       ...(typeof r.asking === "number" && r.asking > 0 ? { asking: r.asking } : {}),
       ...(typeof r.crashResume === "string" ? { crashResume: r.crashResume } : {}),
       ...(typeof resetsAt === "number" ? { resetsAt } : {}),
@@ -266,31 +285,80 @@ function savePersisted(path: string | null, state: Persisted) {
   writeCursor(path, JSON.stringify(state));
 }
 
+/**
+ * What follow watchers saw, one file for all of them: per source (a machine and one filter) its server cursor and
+ * marks, and per machine the last mark told of each chat, so a chat two filters match is told once. Each watcher
+ * writes back only its own sources, over what the file holds then.
+ */
+interface FollowSource { cursor?: string; marks: Record<string, string>; at: number }
+interface FollowFile { v: 3; sources: Record<string, FollowSource>; told: Record<string, Record<string, string>> }
+const FOLLOW_KEEP_MS = 7 * 24 * 3600_000;
+
+function loadFollow(path: string): FollowFile {
+  try {
+    const p = JSON.parse(readFileSync(path, "utf8")) as Partial<FollowFile>;
+    if (p?.v === 3 && p.sources && typeof p.sources === "object") return { v: 3, sources: p.sources, told: p.told && typeof p.told === "object" ? p.told : {} };
+  } catch { /* a missing, stale or foreign file reads as empty */ }
+  return { v: 3, sources: {}, told: {} };
+}
+
+function saveFollow(path: string, mine: Record<string, FollowSource>, told: Record<string, Record<string, string>>, now = Date.now()) {
+  const file = loadFollow(path);
+  Object.assign(file.sources, mine);
+  for (const [k, s] of Object.entries(file.sources)) if (now - (s.at ?? 0) > FOLLOW_KEEP_MS) delete file.sources[k];
+  for (const [label, byId] of Object.entries(told)) file.told[label] = { ...file.told[label], ...byId };
+  const live = new Set(Object.values(file.sources).flatMap(s => Object.keys(s.marks ?? {})));
+  for (const byId of Object.values(file.told)) for (const id of Object.keys(byId)) if (!live.has(id)) delete byId[id];
+  writeCursor(path, JSON.stringify(file));
+}
+
 // --- arguments ----------------------------------------------------------------------
 
 const argv = process.argv.slice(2);
-const threadId = flag(argv, "--thread");
+const follow = argv.includes("--follow");
+const threadIds = flags(argv, "--thread");
+const threadId = follow ? null : threadIds[0] ?? null;
 const runId = flag(argv, "--run");
 const fleet = argv.includes("--fleet");
 const machineFlag = flag(argv, "--machine");
 const machinesFlag = flag(argv, "--machines");
-const lanePrefix = flag(argv, "--lane-prefix");
+const lanePrefixes = flags(argv, "--lane-prefix");
+const lanePrefix = follow ? null : lanePrefixes[0] ?? null;
 const until = flag(argv, "--until");
 const base = (flag(argv, "--url") ?? process.env.LOOKOUT_URL ?? "http://127.0.0.1:8789").replace(/\/$/, "");
 const cursorPath = flag(argv, "--cursor");
+const asJson = argv.includes("--json");
+const forever = argv.includes("--forever");
 const maxMs = Number(process.env.LOOKOUT_WATCH_MAX_MS ?? WATCH_MAX_MS);
-const deadline = Date.now() + (Number.isFinite(maxMs) && maxMs > 0 ? maxMs : WATCH_MAX_MS);
+const deadline = forever ? Infinity : Date.now() + (Number.isFinite(maxMs) && maxMs > 0 ? maxMs : WATCH_MAX_MS);
 
 // --machine names a fleet's one machine, or with --run the machine the run lives on
-const fleetish = fleet || machinesFlag !== null || (machineFlag !== null && runId === null);
-const selectors = [threadId, runId, fleetish ? "fleet" : null].filter(s => s !== null);
-if (selectors.length === 0) usage("one of --thread, the fleet (--fleet, --machine, --machines) or --run is required");
-if (selectors.length > 1) usage("pass one selector: --thread, the fleet, or --run");
+const fleetish = !follow && (fleet || machinesFlag !== null || (machineFlag !== null && runId === null));
+const selectors = [threadId, runId, fleetish ? "fleet" : null, follow ? "follow" : null].filter(s => s !== null);
+if (selectors.length === 0) usage("one of --thread, the fleet (--fleet, --machine, --machines), --run or --follow is required");
+if (selectors.length > 1) usage("pass one selector: --thread, the fleet, --run, or --follow");
 if (until !== null && until !== "all-settled") usage("--until all-settled is the only exit mode");
-if (lanePrefix !== null && !fleetish) usage("--lane-prefix goes with the fleet (--fleet, --machine, --machines)");
+if (lanePrefix !== null && !fleetish) usage("--lane-prefix goes with the fleet (--fleet, --machine, --machines) or --follow");
 if (machineFlag !== null && machinesFlag !== null) usage("pass --machine <name> or --machines <list>, not both");
 if (runId !== null && machinesFlag !== null) usage("a workflow run lives on one machine: pass --machine <name>, not --machines");
-if (lanePrefix === "") usage("--lane-prefix is empty");
+if (lanePrefixes.some(p => p === "")) usage("--lane-prefix is empty");
+if (follow && !lanePrefixes.length && !threadIds.length) usage("--follow needs at least one --lane-prefix or --thread");
+if (!follow && (lanePrefixes.length > 1 || threadIds.length > 1)) usage("several --lane-prefix or --thread filters go with --follow");
+if ((asJson || forever) && !follow) usage("--json and --forever go with --follow");
+
+/** A note that is not a chat's event: a line for Monitor, stderr beside --json output. */
+function note(line: string): void {
+  if (asJson) console.error(line);
+  else emit(line);
+}
+
+function emitEvent(e: WatchEvent): void {
+  if (!asJson) return emit(e.line);
+  const meta: Record<string, string> = { thread_id: e.threadId, state: e.kind };
+  if (e.lane) meta.lane = e.lane;
+  if (e.machine) meta.machine = e.machine;
+  emit(JSON.stringify({ content: e.line, meta }));
+}
 
 // --- the fleet: one read per machine, lines as each answers --------------------------
 
@@ -348,96 +416,149 @@ async function resolveTargets(): Promise<{ targets: Target[]; notes: string[] }>
   return { targets, notes };
 }
 
-async function watchFleet(): Promise<never> {
+/** What one source reads: chats under a lane prefix, named chats, or (null) every chat on the machine. */
+type Filter = { lanePrefix: string } | { ids: string[] } | null;
+const filterKey = (f: Filter) => f === null ? "all" : "lanePrefix" in f ? `prefix:${f.lanePrefix}` : `ids:${[...f.ids].sort().join(",")}`;
+function withFilter(p: URLSearchParams, f: Filter): URLSearchParams {
+  if (f && "lanePrefix" in f) p.set("lanePrefix", f.lanePrefix);
+  else if (f) p.set("ids", f.ids.join(","));
+  return p;
+}
+
+type Parsed = NonNullable<ReturnType<typeof fleetRowsOf>>;
+
+// Opaque snapshots page without advancing the watch baseline, so an omitted question or plan wait cannot settle the batch.
+async function hydrate(api: string, parsed: Parsed, f: Filter) {
+  if (parsed.nextPage) {
+    const rows = [...parsed.rows];
+    let next = parsed.nextPage;
+    const pages = new Set<string>();
+    while (next && Date.now() < deadline && !pages.has(next)) {
+      pages.add(next);
+      const got = await read(api, `/api/lanes?${withFilter(new URLSearchParams({ limit: "200", page: next }), f)}`);
+      const page = got.ok ? fleetRowsOf(got.body) : null;
+      if (!page || page.cursorReset || page.cursor !== parsed.cursor) break;
+      rows.push(...page.rows);
+      next = page.nextPage ?? "";
+    }
+    return { rows, off: null, cursor: null, complete: !next && parsed.total !== null && rows.length >= parsed.total };
+  }
+  if (parsed.complete) return { rows: parsed.rows, off: null as Map<string, string> | null, cursor: null as Map<string, string> | null, complete: true };
+  const cursor = parsed.cursor ? decodeFleetCursor(parsed.cursor) : null;
+  const off0 = offPageMarks(parsed.rows, cursor);
+  // a cursor shorter than `total` is not the matched set; the omitted chats cannot be judged from it
+  if (!off0 || !cursor || (parsed.total !== null && cursor.size < parsed.total))
+    return { rows: parsed.rows, off: null, cursor: null, complete: false };
+  const need = offPageNeedsDetail(off0);
+  const rank = (id: string) => {
+    const mark = off0.get(id) ?? "";
+    const state = mark.split(/[+~]/)[0] ?? mark;
+    return state === "needs_input" || mark.includes("+asking") || state === "quota" ? 0 : 1;
+  };
+  const ids = [...need].sort((a, b) => rank(a) - rank(b)).slice(0, DETAIL_CAP);
+  const extra: FleetRow[] = [];
+  for (let i = 0; i < ids.length; i += 80) {
+    const q = withFilter(new URLSearchParams({ limit: "200" }), f);
+    q.set("ids", ids.slice(i, i + 80).join(","));
+    const got = await read(api, `/api/lanes?${q}`);
+    const page = got.ok ? fleetRowsOf(got.body) : null;
+    if (!page) return { rows: [...parsed.rows, ...extra], off: offPageMarks([...parsed.rows, ...extra], cursor), cursor, complete: false };
+    extra.push(...page.rows);
+  }
+  const rows = [...parsed.rows, ...extra];
+  return { rows, off: offPageMarks(rows, cursor), cursor, complete: rows.length >= (parsed.total ?? Infinity) };
+}
+
+/**
+ * Settles about to be told whose reply a listing cut to its head and tail, read again by id: that read carries the
+ * whole reply (to the server's shown limit), so a decision in the middle of a long report still reaches the line.
+ */
+async function wholeReplies(api: string, rows: FleetRow[], before: Map<string, string>): Promise<FleetRow[]> {
+  const ids = rows.filter(r => r.replyCut && !rowOpen(r) && before.get(r.threadId) !== rowMark(r)).map(r => r.threadId);
+  if (!ids.length) return rows;
+  const whole = new Map<string, string>();
+  for (let i = 0; i < ids.length; i += 40) {
+    const got = await read(api, `/api/lanes?${new URLSearchParams({ limit: "200", ids: ids.slice(i, i + 40).join(",") })}`);
+    for (const r of (got.ok ? fleetRowsOf(got.body)?.rows : null) ?? []) if (!r.replyCut && r.lastReply) whole.set(r.threadId, r.lastReply);
+  }
+  return rows.map(r => whole.has(r.threadId) ? { ...r, lastReply: whole.get(r.threadId)!, replyCut: false } : r);
+}
+
+async function watchSources(): Promise<never> {
   const { targets, notes } = await resolveTargets();
-  for (const n of notes) emit(`[lookout] ${n}`);
+  for (const n of notes) note(`[lookout] ${n}`);
   if (!targets.length) usage("no machine to watch");
-  const state = loadPersisted(cursorPath, JSON.stringify({ base, targets: targets.map(t => t.api), lanePrefix }));
-  const query = (waitS: number, since?: string) => {
-    const p = new URLSearchParams({ limit: "200" });
-    if (lanePrefix !== null) p.set("lanePrefix", lanePrefix);
+  const filters: Filter[] = follow
+    ? [...[...new Set(lanePrefixes)].map(p => ({ lanePrefix: p })), ...(threadIds.length ? [{ ids: [...new Set(threadIds)] }] : [])]
+    : [lanePrefix !== null ? { lanePrefix } : null];
+  const desc = [...new Set(lanePrefixes)].map(p => `lane prefix ${p}`).concat(threadIds.length ? [`${new Set(threadIds).size} named chat${new Set(threadIds).size === 1 ? "" : "s"}`] : []).join(", ");
+  const followPath = follow ? cursorPath ?? join(pluginDataDir(), "follow.json") : null;
+  const batch = follow ? null : loadPersisted(cursorPath, JSON.stringify({ base, targets: targets.map(t => t.api), lanePrefix }));
+  const file = followPath ? loadFollow(followPath) : null;
+  // per machine, the last mark any of this watcher's sources processed of each chat
+  const told: Record<string, Record<string, string>> = {};
+  for (const [label, byId] of Object.entries(file?.told ?? {})) told[label] = { ...byId };
+  const query = (f: Filter, waitS: number, since?: string) => {
+    const p = withFilter(new URLSearchParams({ limit: "200" }), f);
     if (waitS > 0) p.set("wait", String(waitS));
     if (since) p.set("since", since);
     return `/api/lanes?${p.toString()}`;
   };
-  const rt = targets.map(t => ({
-    t,
-    marks: new Map(Object.entries(state.marks[t.label] ?? {})),
-    cursor: state.cursors[t.label] as string | undefined,
-    rows: [] as FleetRow[],
-    /** The server's page was the whole matched set. */
-    pageComplete: true,
-    /** Chats the page omitted, when the cursor named them and this round did not read their lanes. */
-    off: null as Map<string, string> | null,
-    /** ok: its last read answered; retrying: it failed and is tried again after a backoff; down: out of the batch. */
-    state: "ok" as "ok" | "retrying" | "down",
-    /** Answered at least once this arm: its rows are a read, not the empty start. */
-    primed: false,
-    misses: 0,
-    /** Connection failures in a row (DOWN_AFTER). */
-    fails: 0,
-    /** The slow or unreadable line was printed for this streak of misses. */
-    told: false,
-    /** Wait before its next read: a backoff, or a pause after an instant answer. */
-    pause: 0,
-  }));
-  const live = (r: (typeof rt)[number]) => r.state === "ok" && r.primed;
-  // Opaque snapshots page without advancing the watch baseline, so an omitted question or plan wait cannot settle the batch.
-  const hydrate = async (api: string, parsed: NonNullable<ReturnType<typeof fleetRowsOf>>) => {
-    if (parsed.nextPage) {
-      const rows = [...parsed.rows];
-      let next = parsed.nextPage;
-      const pages = new Set<string>();
-      while (next && Date.now() < deadline && !pages.has(next)) {
-        pages.add(next);
-        const q = new URLSearchParams({ limit: "200", page: next });
-        if (lanePrefix !== null) q.set("lanePrefix", lanePrefix);
-        const got = await read(api, `/api/lanes?${q}`);
-        const page = got.ok ? fleetRowsOf(got.body) : null;
-        if (!page || page.cursorReset || page.cursor !== parsed.cursor) break;
-        rows.push(...page.rows);
-        next = page.nextPage ?? "";
-      }
-      return { rows, off: null, cursor: null, complete: !next && parsed.total !== null && rows.length >= parsed.total };
-    }
-    if (parsed.complete) return { rows: parsed.rows, off: null as Map<string, string> | null, cursor: null as Map<string, string> | null, complete: true };
-    const cursor = parsed.cursor ? decodeFleetCursor(parsed.cursor) : null;
-    const off0 = offPageMarks(parsed.rows, cursor);
-    // a cursor shorter than `total` is not the matched set; the omitted chats cannot be judged from it
-    if (!off0 || !cursor || (parsed.total !== null && cursor.size < parsed.total))
-      return { rows: parsed.rows, off: null, cursor: null, complete: false };
-    const need = offPageNeedsDetail(off0);
-    const rank = (id: string) => {
-      const mark = off0.get(id) ?? "";
-      const state = mark.split(/[+~]/)[0] ?? mark;
-      return state === "needs_input" || mark.includes("+asking") || state === "quota" ? 0 : 1;
+  const rt = targets.flatMap(t => filters.map(f => {
+    const key = `${t.api} ${filterKey(f)}`;
+    const kept = file?.sources[key];
+    return {
+      t, f, key,
+      marks: new Map(Object.entries(batch ? batch.marks[t.label] ?? {} : kept?.marks ?? {})),
+      cursor: (batch ? batch.cursors[t.label] : kept?.cursor) || undefined,
+      /** A follow filter this file has no record of: its first read tells news, not history. */
+      fresh: !!file && !kept,
+      rows: [] as FleetRow[],
+      /** The server's page was the whole matched set. */
+      pageComplete: true,
+      /** Chats the page omitted, when the cursor named them and this round did not read their lanes. */
+      off: null as Map<string, string> | null,
+      /** ok: its last read answered; retrying: it failed and is tried again after a backoff; down: out of the batch. */
+      state: "ok" as "ok" | "retrying" | "down",
+      /** Answered at least once this arm: its rows are a read, not the empty start. */
+      primed: false,
+      misses: 0,
+      /** Connection failures in a row (DOWN_AFTER). */
+      fails: 0,
+      /** The slow or unreadable line was printed for this streak of misses. */
+      told: false,
+      /** Wait before its next read: a backoff, or a pause after an instant answer. */
+      pause: 0,
     };
-    const ids = [...need].sort((a, b) => rank(a) - rank(b)).slice(0, DETAIL_CAP);
-    const extra: FleetRow[] = [];
-    for (let i = 0; i < ids.length; i += 80) {
-      const q = new URLSearchParams({ limit: "200", ids: ids.slice(i, i + 80).join(",") });
-      if (lanePrefix !== null) q.set("lanePrefix", lanePrefix);
-      const got = await read(api, `/api/lanes?${q}`);
-      const page = got.ok ? fleetRowsOf(got.body) : null;
-      if (!page) return { rows: [...parsed.rows, ...extra], off: offPageMarks([...parsed.rows, ...extra], cursor), cursor, complete: false };
-      extra.push(...page.rows);
+  }));
+  type Source = (typeof rt)[number];
+  const live = (r: Source) => r.state === "ok" && r.primed;
+  const save = (r: Source) => {
+    if (batch) {
+      batch.cursors[r.t.label] = r.cursor ?? "";
+      batch.marks[r.t.label] = Object.fromEntries(r.marks);
+      return savePersisted(cursorPath, batch);
     }
-    const rows = [...parsed.rows, ...extra];
-    return { rows, off: offPageMarks(rows, cursor), cursor, complete: rows.length >= (parsed.total ?? Infinity) };
+    const mine = rt.filter(s => s.primed || !s.fresh).map(s => [s.key, { ...(s.cursor ? { cursor: s.cursor } : {}), marks: Object.fromEntries(s.marks), at: Date.now() }] as const);
+    saveFollow(followPath!, Object.fromEntries(mine), told);
   };
-  const step = async (r: (typeof rt)[number], body: unknown) => {
+  const step = async (r: Source, body: unknown) => {
     const parsed = fleetRowsOf(body);
     if (!parsed) return null;
-    const hydrated = await hydrate(r.t.api, parsed);
+    const hydrated = await hydrate(r.t.api, parsed, r.f);
     const machine = r.t.here ? undefined : r.t.label;
-    const before = r.marks;
-    const out = fleetStep(hydrated.rows, before, { machine, complete: hydrated.complete });
-    const answerExtra = hydrated.off ? offPageAnswers(before, hydrated.off, machine) : [];
-    const lines = [
-      ...out.lines,
-      ...(hydrated.off ? offPageLines(before, hydrated.off, machine) : []),
+    let before = r.marks;
+    if (r.fresh && !r.primed) {
+      const now = Date.now();
+      before = new Map([...hydrated.rows.filter(x => !primeNews(x, now)).map(x => [x.threadId, rowMark(x)] as const), ...(hydrated.off ?? [])]);
+    }
+    const out = fleetStep(await wholeReplies(r.t.api, hydrated.rows, before), before, { machine, complete: hydrated.complete });
+    const answerExtra = hydrated.off ? offPageAnswerEvents(before, hydrated.off, machine) : [];
+    let events = [
+      ...out.events,
+      ...(hydrated.off ? offPageEvents(before, hydrated.off, machine) : []),
       ...answerExtra,
-      ...(hydrated.cursor ? fleetGone(before, hydrated.rows, hydrated.cursor, machine) : []),
+      ...(hydrated.cursor ? fleetGoneEvents(before, hydrated.rows, hydrated.cursor, machine) : []),
     ];
     r.marks = new Map(out.marks);
     if (hydrated.off && hydrated.cursor) {
@@ -455,31 +576,42 @@ async function watchFleet(): Promise<never> {
       const seen = new Set([...hydrated.rows.map(x => x.threadId), ...hydrated.cursor.keys()]);
       for (const id of [...r.marks.keys()]) if (!seen.has(id)) r.marks.delete(id);
     }
+    if (follow) {
+      // a chat two filters match is told by the first that reads its new mark
+      const byId = (told[r.t.label] ??= {});
+      const markOf = (e: WatchEvent) => e.kind === "gone" ? "gone" : r.marks.get(e.threadId) ?? e.kind;
+      events = events.filter(e => byId[e.threadId] !== markOf(e));
+      for (const [id, mark] of r.marks) if (before.get(id) !== mark) byId[id] = mark;
+      for (const e of events) byId[e.threadId] = markOf(e);
+    }
     if (hydrated.complete || hydrated.cursor) r.cursor = parsed.cursor ?? r.cursor;
     r.rows = hydrated.rows;
     r.pageComplete = hydrated.complete;
     r.off = hydrated.off;
-    state.cursors[r.t.label] = r.cursor ?? "";
-    state.marks[r.t.label] = Object.fromEntries(r.marks);
-    savePersisted(cursorPath, state);
-    return { lines, answers: out.answers + answerExtra.length };
+    r.primed = true;
+    save(r);
+    return { events, answers: out.answers + answerExtra.length };
   };
-  type Target = (typeof rt)[number];
   // each machine reads on its own clock, so a slow one never holds back another's lines
-  const readOnce = async (r: Target) => {
+  const readOnce = async (r: Source) => {
     if (r.pause > 0) await Bun.sleep(r.pause);
     // only a machine that answered its last read holds a wait; the rest get a plain read
     const hold = live(r);
     const waitS = hold ? Math.max(1, Math.min(WAIT_S, Math.ceil((deadline - Date.now()) / 1000))) : 0;
     const started = Date.now();
-    const out = await read(r.t.api, query(waitS, r.cursor), { waitS });
+    const out = await read(r.t.api, query(r.f, waitS, r.cursor), { waitS });
     return { r, out, ms: Date.now() - started };
   };
   const pending = new Map(rt.map(r => [r, readOnce(r)] as const));
-  const timeUp = Bun.sleep(Math.max(0, deadline - Date.now())).then(() => null);
+  const timeUp = forever ? new Promise<null>(() => {}) : Bun.sleep(Math.max(0, deadline - Date.now())).then(() => null);
+  let quietTold = false;
   for (;;) {
     const got = await Promise.race([timeUp, ...pending.values()]);
     if (got === null) {
+      if (follow) {
+        emit(followDeadline(rt.flatMap(r => r.rows), desc));
+        process.exit(0);
+      }
       const more = rt.flatMap(r => [...(r.off?.values() ?? [])]);
       if (rt.some(r => live(r) && !r.pageComplete && r.off === null))
         emit("[lookout] part of the fleet was cut off this read and could not be judged.");
@@ -492,11 +624,11 @@ async function watchFleet(): Promise<never> {
       // the stored cursor is unreadable to that server (an app update changed its format): drop it and
       // resync once from a fresh snapshot, never counting the 400 as the machine not answering
       r.cursor = undefined;
-      delete state.cursors[r.t.label];
-      savePersisted(cursorPath, state);
+      save(r);
       pending.set(r, readOnce(r));
       continue;
     }
+    const wasDown = r.state === "down";
     const out = o.ok ? await step(r, o.body) : null;
     if (!out) {
       r.misses++;
@@ -504,19 +636,28 @@ async function watchFleet(): Promise<never> {
       r.pause = backoffMs(r.misses);
       if (r.state !== "down" && r.fails >= DOWN_AFTER) {
         r.state = "down";
-        emit(`[lookout] ${name} stopped answering (${why(o)}), not watched until it answers again`);
+        note(`[lookout] ${name} stopped answering (${why(o)}), not watched until it answers again`);
       } else if (r.state !== "down") {
         r.state = "retrying";
-        if (!r.told) emit(`[lookout] ${name} ${o.ok ? "answered nothing readable" : o.timedOutS ? `is slow (${why(o)})` : `did not answer (${why(o)})`}, still watched; trying again`);
+        if (!r.told) note(`[lookout] ${name} ${o.ok ? "answered nothing readable" : o.timedOutS ? `is slow (${why(o)})` : `did not answer (${why(o)})`}, still watched; trying again`);
       }
       r.told = true;
     } else {
-      if (r.state === "down") emit(`[lookout] ${name} answers again, watched again`);
-      Object.assign(r, { state: "ok", primed: true, misses: 0, fails: 0, told: false });
-      for (const line of out.lines) emit(line);
-      if (out.answers > 0) process.exit(0);
+      if (wasDown) note(`[lookout] ${name} answers again, watched again`);
+      Object.assign(r, { state: "ok", misses: 0, fails: 0, told: false });
+      for (const e of out.events) emitEvent(e);
+      if (!follow && out.answers > 0) process.exit(0);
       // a fleet with nothing moving answers at once: never spin on it
       r.pause = ms < 1000 ? 1000 : 0;
+    }
+    if (follow) {
+      // a follow watcher outlives a quiet fleet and an app restart: it never exits before its cap
+      if (!quietTold && rt.every(x => live(x) && x.rows.length === 0 && x.pageComplete)) {
+        note(`[lookout] follow: nothing matches ${desc} yet; still following`);
+        quietTold = true;
+      }
+      pending.set(r, readOnce(r));
+      continue;
     }
     if (rt.every(x => x.state === "down")) {
       emit("[lookout] fleet could not be watched (no machine answered).");
@@ -607,8 +748,15 @@ async function watchRun(): Promise<never> {
 
 // --- one chat (the original mode) --------------------------------------------------------
 
+if (forever) {
+  // the bridge that runs a forever watcher holds its stdin: once that closes, nobody reads these lines
+  void (async () => {
+    for await (const _ of Bun.stdin.stream()) { /* nothing is read from it */ }
+    process.exit(0);
+  })();
+}
 if (runId !== null) await watchRun();
-else if (fleetish) await watchFleet();
+else if (fleetish || follow) await watchSources();
 else {
   const thread = threadId!;
   const cursor = readCursor(cursorPath);
