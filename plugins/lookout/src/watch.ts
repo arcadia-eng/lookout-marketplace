@@ -560,7 +560,7 @@ export function followDeadline(rows: FleetRow[], filters: string): string {
   const counts = new Map<string, number>();
   for (const r of rows) if (rowOpen(r) || rowWaitsForPlan(r)) counts.set(r.state, (counts.get(r.state) ?? 0) + 1);
   const going = [...counts.entries()].map(([s, n]) => `${n} ${s}`).join(", ");
-  return `[lookout] follow (${filters}) reached Monitor's 30 minute cap${going ? ` with ${going}` : ""}: arm the same command again; nothing it told is told twice.`;
+  return `[lookout] follow (${filters}) reached Monitor's 30 minute cap${going ? ` with ${going}` : ""}: arm the same command again (nothing it told is told twice), or add these filters to the plugin's monitor with --follow --add, which needs no arming.`;
 }
 
 /**
@@ -573,6 +573,30 @@ export function primeNews(row: FleetRow, now: number): boolean {
   if (rowWaitsOnPerson(row)) return true;
   if (rowOpen(row)) return false;
   return typeof row.updatedAt === "number" && now - row.updatedAt <= FOLLOW_RECENT_MS;
+}
+
+/** What the session's monitor follows (follow.json `follows`): lane prefixes, chat ids, and the machines to read. */
+export interface Follows { lanePrefixes: string[]; threads: string[]; machines?: string }
+
+const followStrings = (v: unknown): string[] =>
+  Array.isArray(v) ? [...new Set(v.filter((s): s is string => typeof s === "string" && s.trim() !== "").map(s => s.trim()))].slice(0, 40) : [];
+
+export function followsOf(v: unknown): Follows {
+  const o = v && typeof v === "object" ? v as Record<string, unknown> : {};
+  const machines = typeof o.machines === "string" ? o.machines.trim() : "";
+  return { lanePrefixes: followStrings(o.lanePrefixes), threads: followStrings(o.threads), ...(machines ? { machines } : {}) };
+}
+
+/** `remove` drops the named filters; `machines` "" clears the machine choice. */
+export function editFollows(prev: Follows, edit: { remove?: boolean; lanePrefixes: string[]; threads: string[]; machines?: string }): Follows {
+  const merge = (a: string[], b: string[]) => edit.remove ? a.filter(x => !b.includes(x)) : [...new Set([...a, ...b])];
+  const machines = edit.machines === undefined ? prev.machines : edit.remove ? undefined : edit.machines || undefined;
+  return followsOf({ lanePrefixes: merge(prev.lanePrefixes, edit.lanePrefixes), threads: merge(prev.threads, edit.threads), machines });
+}
+
+export function followsLabel(f: Follows): string {
+  const parts = [...f.lanePrefixes.map(p => `lane prefix ${p}`), ...(f.threads.length ? [`${f.threads.length} named chat${f.threads.length === 1 ? "" : "s"}`] : [])];
+  return parts.length ? `${parts.join(", ")}${f.machines ? ` on ${f.machines === "*" ? "every machine" : f.machines}` : ""}` : "nothing";
 }
 
 /** Skip a line the previous arm already printed. */

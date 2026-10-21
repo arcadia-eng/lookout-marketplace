@@ -35,7 +35,7 @@ Results of `lookout_delegate`, `lookout_steer`, `lookout_retry` and the other to
 
 ## The watcher: one per batch
 
-When you delegate a batch and do not want to sit in the wait, give the batch's lane keys one prefix (`lane: "oct9-reviews-diff"` and so on), then arm one watcher for the whole batch, not one per chat:
+Lanes you lead for longer than one wait go to the plugin's monitor instead ("Following everything you lead", below): it needs no arming. When you delegate a batch and do not want to sit in the wait, give the batch's lane keys one prefix (`lane: "oct9-reviews-diff"` and so on), then arm one watcher for the whole batch, not one per chat:
 
 ```bash
 sh "${CLAUDE_PLUGIN_ROOT}/scripts/bun.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/watch.ts" --fleet --lane-prefix oct9-reviews --cursor /tmp/watch-oct9-reviews.json --machines "*"
@@ -51,15 +51,17 @@ Monitor, `timeout_ms` 1740000, `persistent` false (or run it as a background com
 
 A settle line carries the reply's first line and its closing paragraph (`done: <first line> … <closing paragraph>`), so a `queued <id>` or a conclusion at the end of a long report reaches you. A done whose reply has a paragraph starting "Decision for the lead:" is `done, asks: <that paragraph>`: answer it with `lookout_steer`. A done whose newest turn was its landing notice is `landed #<pr>`, not a second done.
 
-## Following everything you lead: one watcher
+## Following everything you lead: the plugin's monitor
 
-A lead that keeps many lanes, an agent chat (a Chief of Staff) and anything else going arms one follow watcher instead of a batch watcher per batch:
+The plugin's monitor starts with every interactive Claude Code session and runs until the session ends: it is the wake of a lead that keeps many lanes, an agent chat (a Chief of Staff) and anything else going. Nothing to arm and nothing to re-arm. It follows what `follow.json` in the plugin's data folder names; add what you lead once:
 
 ```bash
-sh "${CLAUDE_PLUGIN_ROOT}/scripts/bun.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/watch.ts" --follow --lane-prefix lead- --thread <agent chat id>
+CLAUDE_PLUGIN_DATA="${CLAUDE_PLUGIN_DATA}" sh "${CLAUDE_PLUGIN_ROOT}/scripts/bun.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/watch.ts" --follow --add --lane-prefix lead- --thread <agent chat id>
 ```
 
-`--lane-prefix` and `--thread` repeat, agent chats included. It prints the same lines as the batch watcher, never exits on a settle, a question or a quiet fleet, and keeps its cursor and marks in the plugin's data folder (`follow.json`; `--cursor <file>` puts them elsewhere), so arming it again tells nothing twice; a filter you add tells what a person waits on and what settled in the last 15 minutes, not older history. Monitor still ends it at 30 minutes (`timeout_ms` 1740000): it prints one line saying so, and you arm the same command again.
+`--lane-prefix` and `--thread` repeat, agent chats included; `--machines "*"` (or names) reads other machines too; `--remove` with the same flags stops following them. The answer names the monitor that takes it up within 3 seconds, or says none runs and gives the command to arm by hand. The monitor prints the batch watcher's lines and nothing else: never a line while nothing it follows changes, never an exit on a settle, a question, a quiet fleet or an app restart. A filter you add tells what a person waits on and what settled in the last 15 minutes, not older history. When the local app has not answered for 2 minutes it says so once and keeps retrying; the lines it missed arrive once the app is back. What you follow stays in the file, so the next session's monitor follows it from its start; every interactive session on this machine with the plugin hears it, so remove what you no longer lead.
+
+A `-p` session runs no plugin monitor. There, and only there, arm Monitor by hand with `persistent: true` and no `timeout_ms` (the two conflict) on `sh "${CLAUDE_PLUGIN_ROOT}/scripts/bun.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/watch.ts" --follow --forever --cursor "${CLAUDE_PLUGIN_DATA}/follow.json"`. Never arm a follow Monitor beside the plugin's: each tells the same lines.
 
 A session that should hear its chats with no watcher at all starts with the `lookout` channel (a Claude Code research preview: a warning dialog at each start, interactive sessions only):
 
@@ -67,7 +69,7 @@ A session that should hear its chats with no watcher at all starts with the `loo
 LOOKOUT_CHANNEL=1 claude --dangerously-load-development-channels plugin:lookout@lookout-marketplace
 ```
 
-The same lines then arrive as `<channel source="lookout" thread_id=… state=… lane=…>` events, for the chats this session delegates and for what `channel.json` in the plugin's data folder (`${CLAUDE_PLUGIN_DATA}`) names: `{"lanePrefixes": ["lead-"], "threads": ["<agent chat id>"]}`, read again when it changes. Act on them with the lookout tools; there is nothing to reply to and nothing to re-arm. Without the channel, follow mode is the way.
+The same lines then arrive as `<channel source="lookout" thread_id=… state=… lane=…>` events, for the chats this session delegates and for what `channel.json` in the plugin's data folder (`${CLAUDE_PLUGIN_DATA}`) names: `{"lanePrefixes": ["lead-"], "threads": ["<agent chat id>"]}`, read again when it changes. Act on them with the lookout tools; there is nothing to reply to and nothing to re-arm. Name a chat in `channel.json` or in `follow.json`, not both, or it is told twice. Without the channel, the monitor is the way.
 
 ## Work orders that leave a decision
 
@@ -108,7 +110,7 @@ Project folders: `lookout_configure_project {projectId, folders: [primary, ...ex
 
 ## Collect
 
-`lookout_fleet` with the thread ids, `brief: false` when you need the replies. `lane.lastReply.text` is the answer. `lane.error` says whether a failure is worth retrying, and `lane.error.next` is the call.
+`lookout_fleet` past ten chats answers brief rows (state, a one-line `summary`, what it waits on or failed on), with what the rows share once in `common`: it fits in one answer, so read it as is, never with a parser. `brief: false` with the thread ids when you need the replies. `lane.lastReply.text` is the answer. `lane.error` says whether a failure is worth retrying, and `lane.error.next` is the call.
 
 A lane key finds its chat: `lookout_fleet` with `lane`.
 

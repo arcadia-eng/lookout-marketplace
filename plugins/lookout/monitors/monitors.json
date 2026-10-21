@@ -1,0 +1,8 @@
+[
+  {
+    "name": "lookout",
+    "command": "CLAUDE_PLUGIN_DATA=\"${CLAUDE_PLUGIN_DATA}\" sh \"${CLAUDE_PLUGIN_ROOT}/scripts/bun.sh\" \"${CLAUDE_PLUGIN_ROOT}/scripts/watch.ts\" --follow --forever",
+    "description": "Lookout chats this session follows: a line when one settles, asks, waits for its plan or lands",
+    "when": "always"
+  }
+]
