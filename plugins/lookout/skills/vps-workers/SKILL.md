@@ -23,7 +23,7 @@ A VPS is a worker of the user's Lookout account: it runs whole Lookout chats (lo
 
 A provider "held back" on the VPS (`lookout_doctor` problems and `providers.heldBack`, or `lookout status` on the box): it refused an older copy than it already had from the account (a rollback guard). The line names the command; run `ssh root@HOST 'sudo -iu lookout lookout providers use-account <provider>'` only when the account's copy is the one to keep (the user reset or re-signed it), else `keep <provider>`. A reset or re-created vault no longer trips it.
 
-A machine with `autoUpdate.on` installs each new signed release by itself within about 30 minutes. To update one listed `outdated` now, from this Mac: `lookout_configure_machine {machine: "vps-2", upgrade: true}` (or `lookout upgrade --on vps-2`). It parks running chats, installs the latest signed release and restarts; the parked chats resume. `ssh root@HOST 'sudo -iu lookout lookout upgrade'` is the same install when you are already on the box. Waiting starts survive.
+A machine with `autoUpdate.on` installs each new signed release by itself within about an hour. To update one listed `outdated` now, from this Mac: `lookout_configure_machine {machine: "vps-2", upgrade: true}` (or `lookout upgrade --on vps-2`). It parks running chats, installs the latest signed release and restarts; the parked chats resume. `ssh root@HOST 'sudo -iu lookout lookout upgrade'` is the same install when you are already on the box. Waiting starts survive.
 
 ## 2. Place work
 
