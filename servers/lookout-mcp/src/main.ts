@@ -25,7 +25,7 @@ const bridgeToken = process.env.LOOKOUT_MCP_BRIDGE_TOKEN ?? "";
 if (!bridgeToken)
   console.error("LOOKOUT_MCP_BRIDGE_TOKEN is unset: browser consent is unavailable until it is set (raw Bearer still works).");
 const publicUrl = (process.env.LOOKOUT_MCP_PUBLIC_URL ?? `http://127.0.0.1:${port}`).replace(/\/$/, "");
-const originUrl = (process.env.LOOKOUT_MCP_ORIGIN_URL ?? "https://arcadiausercontent.com").replace(/\/$/, "");
+const originUrl = (process.env.LOOKOUT_MCP_ORIGIN_URL ?? "https://lookout.arcadia.is").replace(/\/$/, "");
 const bridgeLabel = process.env.LOOKOUT_MCP_BRIDGE_LABEL?.trim() || hostname();
 const roots = (process.env.LOOKOUT_MCP_ROOTS ?? "").split(",").map(s => s.trim()).filter(Boolean).map(canonicalPath);
 // Durable client registrations live in their own private dir beside the

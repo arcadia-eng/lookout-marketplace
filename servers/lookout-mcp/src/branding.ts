@@ -33,7 +33,7 @@ export const BRANDING = {
   title: "Lookout",
   description:
     "Arcadia's coding-agent harness as MCP tools: delegate work to real sessions, poll progress, steer, stop and rewind.",
-  websiteUrl: "https://arcadiausercontent.com",
+  websiteUrl: "https://lookout.arcadia.is",
 } as const;
 
 /** Routes the icon bytes are served at (wired in app.ts, advertised below). */

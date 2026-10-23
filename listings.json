@@ -29,14 +29,14 @@
           "host": "grok",
           "label": "Grok custom connector (hosted)",
           "transport": "http",
-          "url": "https://mcp.lookout.itoowasinarcadia.com/mcp",
+          "url": "https://mcp.lookout.arcadia.is/mcp",
           "auth": { "type": "oauth2-pkce", "scope": "mcp" }
         },
         {
           "host": "generic",
           "label": "Any MCP client (hosted)",
           "transport": "http",
-          "url": "https://mcp.lookout.itoowasinarcadia.com/mcp",
+          "url": "https://mcp.lookout.arcadia.is/mcp",
           "auth": { "type": "oauth2-pkce", "scope": "mcp" }
         }
       ]
