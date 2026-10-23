@@ -5,7 +5,7 @@ description: Run Lookout chats on the user's Linux VPSs instead of this Mac, to 
 
 # Lookout agents on a VPS
 
-A VPS is a worker of the user's Lookout account: it runs whole Lookout chats (loop, tools, subscriptions) and reports its load. This Mac is the control plane: you place work from here. Lookout Agents (the app's orchestrator agents) live only on the Mac; a VPS runs coding chats.
+A VPS is a worker of the user's Lookout account: it runs whole Lookout chats (loop, tools, subscriptions) and reports its load. This Mac is the control plane: you place work from here. This skill puts coding chats on a VPS. Lookout Agents (the app's orchestrator agents) live on the Mac unless the user makes a machine an agents host (`lookout_configure_machine {machine, agentsHost: true}`, only when the user asks) and moves an agent there or creates one on it.
 
 ## 1. Enroll a fresh VPS (once)
 

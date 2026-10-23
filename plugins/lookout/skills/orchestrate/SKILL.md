@@ -116,7 +116,7 @@ A lane key finds its chat: `lookout_fleet` with `lane`.
 
 ## Before the session ends: hand chats off
 
-A chat you started that still matters when this session ends would be left with nobody watching it. Hand it to a Lookout agent with `lookout_handoff {threadIds, agent}` (or `lanePrefix` for a batch; `machine` when the chats live elsewhere): the agent hears each one once it settles, steers it, and reports to the user. You hand only chats your client started, on another machine too when you started them there from this device; `not_yours` means another client's (or one no client attested starting), which only the user hands (the chat's menu, Hand to, or Hand by lane prefix for a batch). The lanes then carry `handedTo`; your own `lookout_steer` still reaches them, as the user's message, so tell the agent rather than steering past it.
+A chat you started that still matters when this session ends would be left with nobody watching it. Hand it to a Lookout agent with `lookout_handoff {threadIds, agent}` (or `lanePrefix` for a batch; `machine` when the chats live elsewhere): the agent hears each one once it settles, steers it, and reports to the user. You can hand any chat that isn't an agent's own, whoever started it, and the hand-off is attributed to your client; an agent's own chat answers `agent_chat` and an archived one `archived`. The lanes then carry `handedTo`; your own `lookout_steer` still reaches them, as the user's message, so tell the agent rather than steering past it.
 
 A worktree chat's branch is in `lookout_check` `reply.git`. Land it with `lookout_merge_worktree` (into that machine's checkout) or `lookout_push_worktree` (to the remote, then fetch it here).
 
