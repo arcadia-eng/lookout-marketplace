@@ -461,6 +461,7 @@ export interface RunSnap {
    */
   agents?: { key: string; label: string; state: string; reason?: string; until?: number }[];
   error?: string | null;
+  short?: { failed: number; notRun: string[] };
 }
 
 const RUN_ENDS = new Set(["completed", "failed", "stopped", "superseded"]);
@@ -521,7 +522,9 @@ export function runStep(snap: RunSnap, before: string | null, machine?: string):
   }
   if (RUN_ENDS.has(snap.state)) {
     const why = snap.state === "failed" && snap.error ? errTail(snap.error) : "";
-    return { line: `[lookout] ${at} ${snap.state}${why}`, mark, exit: true };
+    const s = snap.state === "completed" ? snap.short : undefined;
+    const short = s ? ` short of its plan: ${[s.failed ? `${s.failed} failed` : "", s.notRun.length ? `${s.notRun.length} phase${s.notRun.length === 1 ? "" : "s"} not run` : ""].filter(Boolean).join(", ")}` : "";
+    return { line: `[lookout] ${at} ${snap.state}${why}${short}`, mark, exit: true };
   }
   if (snap.state === "paused") return { line: `[lookout] ${at} paused`, mark, exit: true };
   const prev = runMark(before);

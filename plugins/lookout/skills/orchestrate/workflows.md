@@ -41,13 +41,16 @@ conversation), `fresh: true` (never reuse a result: checks of live state), `ask(
    sh "${CLAUDE_PLUGIN_ROOT}/scripts/bun.sh" "${CLAUDE_PLUGIN_ROOT}/scripts/watch.ts" --run <wfr_id> --cursor /tmp/watch-<wfr_id>.json
    ```
    Monitor, `timeout_ms` 1740000, or a background command. One line when the run ends, pauses, waits on a plan reset,
-   asks, or one of its agents parks or fails; it exits on an end or an ask. Re-arm with the same `--cursor` file after
+   asks, or one of its agents parks or fails; it exits on an end or an ask. A line ending `completed short of its
+   plan: N failed, M phases not run` asks for a resume (step 4), not a plain read. Re-arm with the same `--cursor` file after
    a cut; it prints only what is new. A run on another machine: add `--machine <name>`.
 4. Read the run once at the end: `lookout_workflows {runId}`. A result past 20,000 characters comes in pages
    (`resultTruncated.next` names the `resultFrom` call); `progress: true` adds its status.md text (every agent). A
    program that returns a compact object (counts, verdicts, paths) and writes long findings to a file costs you far
    less context. One agent's result does not wait for the run: `lookout_workflows {runId, agent: <label or agentId>}`
-   returns it whole as soon as that agent is done, in the same pages (`resultFrom`).
+   returns it whole as soon as that agent is done, in the same pages (`resultFrom`). A completed run whose program
+   returned short of its plan carries `fellShort` (`agentsFailed`, `phasesNotRun`, its warnings), and the app shows
+   it failed: tell the user and read `result`; `lookout_run_workflow {resume: "<wfr_id>"}` runs the failed agents again, reusing the rest.
 
 ## While it runs
 

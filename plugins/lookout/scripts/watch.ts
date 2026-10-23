@@ -222,6 +222,14 @@ function fleetRowsOf(body: unknown): { rows: FleetRow[]; cursor?: string; nextPa
   };
 }
 
+function shortOf(v: unknown): Pick<RunSnap, "short"> {
+  if (!v || typeof v !== "object") return {};
+  const f = v as { agentsFailed?: unknown; phasesNotRun?: unknown };
+  const failed = typeof f.agentsFailed === "number" ? f.agentsFailed : 0;
+  const notRun = Array.isArray(f.phasesNotRun) ? f.phasesNotRun.filter((p): p is string => typeof p === "string") : [];
+  return failed || notRun.length ? { short: { failed, notRun } } : {};
+}
+
 /** A run status answer into the snapshot the run step takes. */
 function runSnapOf(runId: string, body: unknown): { snap: RunSnap; cursor?: string } | null {
   if (!body || typeof body !== "object") return null;
@@ -266,6 +274,7 @@ function runSnapOf(runId: string, body: unknown): { snap: RunSnap; cursor?: stri
         }
         : {}),
       ...(typeof run?.error === "string" ? { error: run.error } : {}),
+      ...shortOf(b.fellShort),
     },
     ...(typeof b.cursor === "string" ? { cursor: b.cursor } : {}),
   };

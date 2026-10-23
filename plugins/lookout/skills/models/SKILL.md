@@ -17,7 +17,7 @@ The canonical document is `GET /api/providers` on the local Lookout app (`http:/
 
 ## How to choose
 
-1. Drop `expired`, `refused`, and `disconnected`.
+1. Drop `expired`, `refused`, `ended` (no active plan), and `disconnected`.
 2. Drop `exhausted` (a window is spent until `resetsAt`) unless the user explicitly wants that provider.
 3. Among the rest, prefer the provider whose tightest window has the most `leftPercent`.
 4. A `connected` provider with `metered: false` (no plan windows) is the right default for a trivial task. `lookout_models` shows what it can run. Do not invent a model id; use one from that list. OpenCode's free catalog is the usual unmetered choice when it is connected.
