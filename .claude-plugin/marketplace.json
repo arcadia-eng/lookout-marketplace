@@ -19,7 +19,7 @@
       },
       "category": "development",
       "license": "MIT",
-      "homepage": "https://lookout.itoowasinarcadia.com/docs/other-apps",
+      "homepage": "https://lookout.arcadia.is/docs/other-apps",
       "repository": "https://github.com/arcadia-eng/lookout-marketplace",
       "keywords": ["lookout", "orchestrator", "subagent", "mcp", "machines"]
     }

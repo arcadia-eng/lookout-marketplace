@@ -7,7 +7,7 @@
     "name": "Arcadia",
     "url": "https://github.com/arcadia-eng"
   },
-  "homepage": "https://lookout.itoowasinarcadia.com/docs/other-apps",
+  "homepage": "https://lookout.arcadia.is/docs/other-apps",
   "repository": "https://github.com/arcadia-eng/lookout-marketplace",
   "license": "MIT",
   "keywords": ["lookout", "orchestrator", "subagent", "mcp", "machines"]

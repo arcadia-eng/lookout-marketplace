@@ -68,7 +68,7 @@ one authorize + consent hop, not a fresh dynamic registration.
 | `LOOKOUT_MCP_PORT` | `8792` | listen port (host `127.0.0.1`) |
 | `LOOKOUT_MCP_PUBLIC_URL` | `http://127.0.0.1:<port>` | the origin hosts reach (drives OAuth redirects + icon URLs) |
 | `LOOKOUT_MCP_ROOTS` | - (empty) | comma-separated canonical roots `lookout_delegate`/`lookout_create_project` may create workspaces under; empty = existing projects only |
-| `LOOKOUT_MCP_ORIGIN_URL` | `https://arcadiausercontent.com` | accounts origin for consent + grant checks |
+| `LOOKOUT_MCP_ORIGIN_URL` | `https://lookout.arcadia.is` | accounts origin for consent + grant checks |
 | `LOOKOUT_MCP_BRIDGE_TOKEN` | - | bridge→origin credential; unset disables browser consent (503), raw Bearer unaffected |
 | `LOOKOUT_MCP_BRIDGE_LABEL` | hostname | shown on the consent screen and in Sessions |
 | `LOOKOUT_MCP_CLIENTS_FILE` | `$XDG_CONFIG_HOME/lookout/mcp/clients.json` (`~/.config/…` without XDG) | durable dynamic-client registry: 0600 file, atomic writes, strictly revalidated on load; delete to reset all registrations |
