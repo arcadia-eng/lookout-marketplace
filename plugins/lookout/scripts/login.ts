@@ -12,7 +12,8 @@ import { exchangeCode, oauthPath, pkcePair, writeOAuthFile } from "../src/oauth.
 import { REMOTE_MCP_URL } from "../src/target.js";
 
 const mcpUrl = (process.env.LOOKOUT_MCP_REMOTE_URL ?? REMOTE_MCP_URL).replace(/\/$/, "");
-const origin = new URL(mcpUrl).origin;
+const { origin, pathname } = new URL(mcpUrl);
+const metaUrl = `${origin}/.well-known/oauth-authorization-server${pathname === "/" ? "" : pathname}`;
 
 function openBrowser(url: string) {
   const cmd = process.platform === "darwin" ? "open" : process.platform === "win32" ? "cmd" : "xdg-open";
@@ -20,9 +21,9 @@ function openBrowser(url: string) {
   Bun.spawn([cmd, ...args], { stdout: "ignore", stderr: "ignore" });
 }
 
-const metaRes = await fetch(`${origin}/.well-known/oauth-authorization-server`, { headers: { accept: "application/json" } });
+const metaRes = await fetch(metaUrl, { headers: { accept: "application/json" } });
 if (!metaRes.ok) {
-  console.error(`login: discovery failed (HTTP ${metaRes.status}) at ${origin}`);
+  console.error(`login: discovery failed (HTTP ${metaRes.status}) at ${metaUrl}`);
   process.exit(1);
 }
 const meta = await metaRes.json() as { authorization_endpoint?: string; token_endpoint?: string; registration_endpoint?: string };

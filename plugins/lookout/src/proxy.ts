@@ -1,6 +1,6 @@
 // One JSON-RPC message from Claude's stdio to the bridge's Streamable HTTP
 // endpoint, and the response (if the message was a request) back. The HTTP
-// bridge answers JSON (`enableJsonResponse`); an SSE body is accepted too.
+// bridge answers JSON, or SSE for a call past its first keepalive.
 
 export interface ForwardInput {
   mcpUrl: string;
