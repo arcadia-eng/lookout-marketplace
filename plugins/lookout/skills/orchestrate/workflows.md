@@ -19,14 +19,14 @@ Most scripts run unchanged: pass the file's absolute path. Change only these:
 | `budget.total`, `budget.remaining()` | `budget` is `{agents: {cap, used, remaining}, tokens}` |
 | `Promise.race`, `Promise.any` | refused at launch; rewrite |
 | about 10 agents at once | `meta.concurrency`, default 8, at most 32: declare it for a wider fan-out |
-| 1000 agents per run | 24 without an approval (below); declare `meta.agents` for a bigger run |
-| no agent timeout | `timeout` in running minutes, default 120: raise it for agents that wait on long builds or merges |
+| 1000 agents per run | 24 without an approval (below) by default (Agents without asking in Settings › Chat › Subagents), the whole 1000 when the user chose Unlimited; declare `meta.agents` for a bigger run |
+| no agent timeout | none by default; `timeout` (minutes) sets one: the agent is told to wrap up and gets up to 5 more minutes before it is cut |
 | subagents read your user-level CLAUDE.md | Lookout agents read the workspace's AGENTS.md, CLAUDE.md, `.lookout/rules`, `.cursor/rules` only: put user-level rules in the brief |
 
 `schema`, `effort`, `label`, `phase`, `parallel`, `pipeline`, `log`, `args` and the determinism bans behave as in Claude
 Code. Lookout adds `tools: "read"` (an agent that cannot write; its Shell refuses anything but inspection commands, so
 a checker that must run project scripts keeps the default tools), `continue: "<label>"` (carry on a finished agent's
-conversation), `fresh: true` (never reuse a result: checks of live state), `ask(question, {choices})` and `warn()`.
+conversation, or one an earlier launch parked), `fresh: true` (never reuse a result: checks of live state), `ask(question, {choices})` and `warn()`.
 `lookout_workflows {reference: true}` prints the whole API.
 
 ## Launch and follow
@@ -56,7 +56,8 @@ conversation), `fresh: true` (never reuse a result: checks of live state), `ask(
 
 - `asks` on the run (and `asking` on the host chat's lane): a program's `ask()`, or an approval. Answer with
   `lookout_answer_workflow {runId, option, value}`, relaying the user's answer. A new run declaring more agents than
-  the chat's allowance (24 by default) waits for `run` or `raise`; a run that reaches its agents cap waits for a raise
+  the chat's allowance (24 by default, Agents without asking in Settings › Chat › Subagents; no limit when the user chose
+  Unlimited) waits for `run` or `raise`; a run that reaches its agents cap waits for a raise
   or `end`. Approve only what the user asked for.
 - An agent whose plan is spent parks and goes on at the reset (or on the next model of its list). Leave it.
 - Lookout restarting cuts the run; its boot relaunches it: finished agents are reused and cut ones continue their own
@@ -65,7 +66,12 @@ conversation), `fresh: true` (never reuse a result: checks of live state), `ask(
   the program goes on.
 - To change the work: edit the program and `lookout_run_workflow {resume: "<wfr_id>", path}`. Each call is keyed by
   what it asks, so only edited calls and the calls whose prompts embed their results run again; `rerun`, `from` and
-  `freshAll` force chosen finished agents.
+  `freshAll` force chosen finished agents. A relaunch keeps later phases' agents running until it reaches their phase
+  (declare `meta.phases` and give each call its `phase`): only one the new program doesn't issue again there parks.
+  To carry on a parked or finished agent's conversation from an edited program, `continue: "<its label>"` reaches the
+  newest earlier launch's agent with that label. Before resuming with an edited program, call it once with
+  `dryRun: true`: it launches nothing and lists each call's fate (reused, rerun, running, continues, new, refused) and
+  the agents it would park or stop.
 
 ## Picking models
 

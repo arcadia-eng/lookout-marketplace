@@ -78,7 +78,8 @@ function usage(message: string): never {
 /** One lane of GET /api/lanes, narrowed to what the lines say. */
 function snapOf(row: Record<string, unknown>): LaneSnap | null {
   if (typeof row.state !== "string") return null;
-  const question = row.question && typeof row.question === "object" ? (row.question as { title?: unknown }).title : undefined;
+  const asked = row.question && typeof row.question === "object" ? row.question as { title?: unknown; kind?: unknown } : undefined;
+  const question = asked?.title;
   const reply = row.lastReply && typeof row.lastReply === "object" ? row.lastReply as { text?: unknown; truncated?: unknown } : null;
   const parked = parkedOf(row.parked);
   const openTodos = openTodosOf(row.openTodos);
@@ -89,6 +90,7 @@ function snapOf(row: Record<string, unknown>): LaneSnap | null {
     working: row.working === true,
     ...(typeof row.title === "string" ? { title: row.title } : {}),
     ...(typeof question === "string" ? { question } : {}),
+    ...(asked?.kind === "handoff" ? { handoff: true } : {}),
     ...(typeof reply?.text === "string" ? { lastReply: reply.text, ...(reply.truncated === true ? { replyCut: true } : {}) } : {}),
     ...(typeof row.lastStopReason === "string" ? { lastStopReason: row.lastStopReason } : {}),
     ...(openTodos ? { openTodos } : {}),

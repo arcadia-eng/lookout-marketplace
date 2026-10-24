@@ -33,6 +33,7 @@ export interface LaneSnap {
   working: boolean;
   title?: string;
   question?: string;
+  handoff?: boolean;
   lastReply?: string;
   /** How the last turn ended (the lane's `lastStopReason`); an `incomplete` state's which limit. */
   lastStopReason?: string;
@@ -175,6 +176,7 @@ export function watchEvent(threadId: string, lane: LaneSnap | null, x: WatchExtr
   }
   if (lane.state === "needs_input") {
     const q = lane.question?.trim();
+    if (lane.handoff) return say("needs_input", `needs input: take over the Browser${q ? `: ${q}` : ""}`);
     return say("needs_input", q ? `needs input: ${q}` : "needs input");
   }
   if ((x.asking ?? 0) > 0) return say("workflow_asks", `workflow asks (${x.asking} open)`);
