@@ -68,7 +68,7 @@
       "audience": ["aecb8b4ad433e6c1bf263d9a152e912135aa8c91af22442cdd120e5d4cc700b3"],
       "capabilities": {
         "can": ["Search and read mail and drafts", "Write drafts and replies", "Label and archive", "Mark read or unread", "Move to Trash or Spam"],
-        "cannot": ["Send: only you send", "Delete mail for good", "Open what an attachment holds", "Change Gmail's settings"]
+        "cannot": ["Send mail (only you can)", "Delete mail for good", "Open what an attachment holds", "Change Gmail's settings"]
       },
       "untrusted": true,
       "limitedUse": true,
