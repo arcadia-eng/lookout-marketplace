@@ -49,7 +49,7 @@ Monitor, `timeout_ms` 1740000, `persistent` false (or run it as a background com
 - One chat only: `--thread <id>`.
 - The watcher needs the local app. On the hosted MCP with no local app, block on `lookout_fleet {waitSeconds}` instead.
 
-A settle line carries the reply's first line and its closing paragraph (`done: <first line> … <closing paragraph>`), so a `queued <id>` or a conclusion at the end of a long report reaches you. A done whose reply has a paragraph starting "Decision for the lead:" is `done, asks: <that paragraph>`: answer it with `lookout_steer`. A done whose newest turn was its landing notice is `landed #<pr>`, not a second done.
+A settle line carries the reply's first line and its closing paragraph (`done: <first line> … <closing paragraph>`), so a `queued <id>` or a conclusion at the end of a long report reaches you. A turn that ends on a paragraph starting "Decision for the lead:" is `done, asks: <that paragraph>` (`turn done (background), asks:` while its workers go on, `done, landed #<pr>, asks:` when a landing came after it), and the watcher exits on it as on a question: answer it with `lookout_steer`. A done whose newest turn was its landing notice, its reply already told, is `landed #<pr>`, not a second done.
 
 ## Following everything you lead: the plugin's monitor
 

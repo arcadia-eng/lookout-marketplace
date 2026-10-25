@@ -33,8 +33,8 @@ import { pluginDataDir } from "../src/data-dir.js";
 import { CLIENT_HEADER, HOLD_HEADER, localGet, machineBase, sessionHeaders } from "../src/local.js";
 import {
   deadlineLine, decodeFleetCursor, editFollows, fleetDeadline, fleetGoneEvents, fleetPageSettled, fleetStep, fleetSummary, fleetSummaryRows,
-  followDeadline, followsLabel, followsOf, offPageAnswerEvents, offPageEvents, offPageMarks, offPageNeedsDetail, primeNews, rowMark, rowOpen,
-  runDeadline, runStep, rowWaitsForPlan, takeSseEvents, unseen, WATCH_MAX_MS, watchLine,
+  followDeadline, followsLabel, followsOf, offPageAnswerEvents, offPageEvents, offPageMarks, offPageNeedsDetail, primeNews, rowMark,
+  runDeadline, runStep, rowWaitsForPlan, sameMark, takeSseEvents, unseen, WATCH_MAX_MS, watchLine,
   type FleetRow, type Follows, type LaneSnap, type RunSnap, type WatchEvent,
 } from "../src/watch.js";
 
@@ -80,7 +80,7 @@ function snapOf(row: Record<string, unknown>): LaneSnap | null {
   if (typeof row.state !== "string") return null;
   const asked = row.question && typeof row.question === "object" ? row.question as { title?: unknown; kind?: unknown } : undefined;
   const question = asked?.title;
-  const reply = row.lastReply && typeof row.lastReply === "object" ? row.lastReply as { text?: unknown; truncated?: unknown } : null;
+  const reply = row.lastReply && typeof row.lastReply === "object" ? row.lastReply as { text?: unknown; truncated?: unknown; seq?: unknown } : null;
   const parked = parkedOf(row.parked);
   const openTodos = openTodosOf(row.openTodos);
   const landed = landedOf(row.landed);
@@ -92,6 +92,7 @@ function snapOf(row: Record<string, unknown>): LaneSnap | null {
     ...(typeof question === "string" ? { question } : {}),
     ...(asked?.kind === "handoff" ? { handoff: true } : {}),
     ...(typeof reply?.text === "string" ? { lastReply: reply.text, ...(reply.truncated === true ? { replyCut: true } : {}) } : {}),
+    ...(typeof reply?.seq === "number" ? { replySeq: reply.seq } : {}),
     ...(typeof row.lastStopReason === "string" ? { lastStopReason: row.lastStopReason } : {}),
     ...(openTodos ? { openTodos } : {}),
     ...(Array.isArray(row.shells) && row.shells.length ? { shells: row.shells } : {}),
@@ -515,18 +516,19 @@ async function hydrate(api: string, parsed: Parsed, f: Filter) {
 }
 
 /**
- * Settles about to be told whose reply a listing cut to its head and tail, read again by id: that read carries the
+ * Turns about to be told whose reply a listing cut to its head and tail, read again by id: that read carries the
  * whole reply (to the server's shown limit), so a decision in the middle of a long report still reaches the line.
  */
 async function wholeReplies(api: string, rows: FleetRow[], before: Map<string, string>): Promise<FleetRow[]> {
-  const ids = rows.filter(r => r.replyCut && !rowOpen(r) && before.get(r.threadId) !== rowMark(r)).map(r => r.threadId);
+  const ids = rows.filter(r => r.replyCut && !r.live && !sameMark(before.get(r.threadId), rowMark(r))).map(r => r.threadId);
   if (!ids.length) return rows;
-  const whole = new Map<string, string>();
+  const whole = new Map<string, Pick<FleetRow, "lastReply" | "replySeq">>();
   for (let i = 0; i < ids.length; i += 40) {
     const got = await read(api, `/api/lanes?${new URLSearchParams({ limit: "200", ids: ids.slice(i, i + 40).join(",") })}`);
-    for (const r of (got.ok ? fleetRowsOf(got.body)?.rows : null) ?? []) if (!r.replyCut && r.lastReply) whole.set(r.threadId, r.lastReply);
+    for (const r of (got.ok ? fleetRowsOf(got.body)?.rows : null) ?? [])
+      if (!r.replyCut && r.lastReply) whole.set(r.threadId, { lastReply: r.lastReply, ...(r.replySeq !== undefined ? { replySeq: r.replySeq } : {}) });
   }
-  return rows.map(r => whole.has(r.threadId) ? { ...r, lastReply: whole.get(r.threadId)!, replyCut: false } : r);
+  return rows.map(r => whole.has(r.threadId) ? { ...r, ...whole.get(r.threadId)!, replyCut: false } : r);
 }
 
 interface Spec { lanePrefixes: string[]; threadIds: string[]; reach: Reach }

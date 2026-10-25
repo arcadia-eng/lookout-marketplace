@@ -1,11 +1,8 @@
-// The Monitor watcher: one line when a Lookout chat settles or needs a
-// person, nothing while it is working. SSE frames are split here so the
-// script can be tested without a server, and the fleet and run steps turn a
-// snapshot plus the marks of the previous read into the lines a batch
-// watcher prints: one per settle, needs_input, quota wall (with the reset)
-// or workflow ask, never the same event twice across a cursor. A chat that
-// waits out its plan (state parked) gets one line and stays watched. A page
-// cut at the lanes limit is not the batch: omitted chats still count.
+// The Monitor watcher: one line when a Lookout chat settles, asks or needs a
+// person, nothing while it works. SSE frames are split here so the script can
+// be tested without a server; the fleet and run steps turn a snapshot plus the
+// previous read's marks into a batch's lines, never one event twice across a
+// cursor. A page cut at the lanes limit is not the batch.
 
 export interface SseEvent { data: string }
 
@@ -35,6 +32,8 @@ export interface LaneSnap {
   question?: string;
   handoff?: boolean;
   lastReply?: string;
+  /** The lane's `lastReply.seq`. */
+  replySeq?: number;
   /** How the last turn ended (the lane's `lastStopReason`); an `incomplete` state's which limit. */
   lastStopReason?: string;
   /** The lane's `openTodos`: its last turn ended with open todos while nothing of its own ran. */
@@ -87,6 +86,8 @@ export interface WatchExtras {
   resetsAt?: number;
   /** The machine the chat lives on, when it is not this one. */
   machine?: string;
+  /** The previous mark carried this reply. */
+  replyTold?: boolean;
 }
 
 const isoMinute = (ms: number) => `${new Date(ms).toISOString().slice(0, 16)}Z`;
@@ -162,8 +163,8 @@ export interface WatchEvent { threadId: string; line: string; kind: WatchKind; m
  * A quota wall names when the plan resets; a chat that waits for its plan
  * says whose and until when (the watcher prints it and keeps watching:
  * rowWaitsForPlan); every other settle carries the reply's first line and its
- * closing paragraph. A done that closes on "Decision for the lead:" is an
- * `asks` line, and a done whose newest turn was its landing notice says the PR.
+ * closing paragraph. A turn ending on "Decision for the lead:" asks, even
+ * landed or with background work going; a landing notice's turn says the PR.
  */
 export function watchEvent(threadId: string, lane: LaneSnap | null, x: WatchExtras = {}): Omit<WatchEvent, "threadId"> | null {
   if (!lane) return null;
@@ -180,7 +181,14 @@ export function watchEvent(threadId: string, lane: LaneSnap | null, x: WatchExtr
     return say("needs_input", q ? `needs input: ${q}` : "needs input");
   }
   if ((x.asking ?? 0) > 0) return say("workflow_asks", `workflow asks (${x.asking} open)`);
-  if (lane.working || lane.live || OPEN.has(lane.state)) return null;
+  if (lane.live) return null;
+  const decision = !x.replyTold && (lane.state === "done" || OPEN.has(lane.state)) && !laneOpenTodos(lane)
+    ? replyGist(lane.lastReply)?.decision : undefined;
+  if (decision) {
+    const how = lane.state === "done" ? "done" : `turn done (${lane.state})`;
+    return say("asks", `${how}${lane.landed ? `, landed #${lane.landed.pr}` : ""}, asks: ${decision}`);
+  }
+  if (lane.working || OPEN.has(lane.state)) return null;
   if (lane.state === "quota") {
     const resets = x.resetsAt ? ` (resets ${isoMinute(x.resetsAt)})` : "";
     return say("quota", `quota${resets}${gistTail(lane.lastReply)}`);
@@ -189,8 +197,6 @@ export function watchEvent(threadId: string, lane: LaneSnap | null, x: WatchExtr
   if (todos) return say(OPEN_TODOS, `${openTodosLine(todos.count)}${gistTail(todos.lastLine || lane.lastReply)}`);
   if (lane.state === "incomplete") return say("incomplete", `incomplete: ${incompleteHow(lane.lastStopReason)}${gistTail(lane.lastReply)}`);
   if (lane.state === "done" && lane.landed) return say("landed", `landed #${lane.landed.pr}`);
-  const decision = lane.state === "done" ? replyGist(lane.lastReply)?.decision : undefined;
-  if (decision) return say("asks", `done, asks: ${decision}`);
   return say(lane.state, `${lane.state}${gistTail(lane.lastReply)}`);
 }
 
@@ -220,10 +226,20 @@ export function rowOpen(row: FleetRow): boolean {
   return !SETTLED.has(row.state);
 }
 
-/** The mark a fleet read keeps of a chat: its state, a workflow ask, an open-todos settle, a landing, a crash resume. */
+/** The mark a fleet read keeps of a chat: its state, a workflow ask, an open-todos settle, a landing, a crash resume, the reply. */
 export function rowMark(row: FleetRow): string {
   const landed = row.state === "done" && row.landed ? `+landed${row.landed.pr}` : "";
-  return `${row.state}${(row.asking ?? 0) > 0 ? "+asking" : ""}${laneOpenTodos(row) ? "+todos" : ""}${landed}${row.crashResume ? `~${row.crashResume}` : ""}`;
+  const reply = !row.live && row.replySeq !== undefined ? `+r${row.replySeq}` : "";
+  return `${row.state}${(row.asking ?? 0) > 0 ? "+asking" : ""}${laneOpenTodos(row) ? "+todos" : ""}${landed}${row.crashResume ? `~${row.crashResume}` : ""}${reply}`;
+}
+
+const REPLY_PART = /\+r\d+$/;
+const replyPart = (mark: string | undefined): string | undefined => mark ? REPLY_PART.exec(mark)?.[0] : undefined;
+
+/** A mark without the reply part (a server cursor's, an older arm's) matches on the rest. */
+export function sameMark(before: string | undefined, mark: string): boolean {
+  if (before === undefined) return false;
+  return before === mark || (!replyPart(before) && before === mark.replace(REPLY_PART, ""));
 }
 
 /** A mark back to whether the batch still waits on that chat. */
@@ -249,13 +265,11 @@ export interface FleetStep {
 }
 
 /**
- * One fleet read against the marks of the previous one. A chat whose mark
- * changed gets a line when it settled, hit a quota wall or now needs a
- * person; one still working moves silently, and a crash resume that goes on
- * by itself is watched, not told. A chat that left the matched set while it
- * was still in flight (archived, deleted) says so; one that left after it
- * settled does not, its line already went out. `complete` false means the
- * read was cut (over its limit), so a missing chat is not reported as gone.
+ * One fleet read against the marks of the previous one: a line per changed mark
+ * that settled, hit a quota wall, asks or needs a person; a working chat and a
+ * crash resume going on by itself stay silent. A chat that left mid-flight
+ * (archived, deleted) is named. `complete` false: the read was cut, so a
+ * missing chat is not gone.
  */
 export function fleetStep(rows: FleetRow[], before: Map<string, string>, x: { machine?: string; complete?: boolean } = {}): FleetStep {
   const marks = new Map<string, string>();
@@ -263,13 +277,16 @@ export function fleetStep(rows: FleetRow[], before: Map<string, string>, x: { ma
   let open = 0;
   let answers = 0;
   for (const row of rows) {
-    const mark = rowMark(row);
+    const prev = before.get(row.threadId);
+    // mid-turn the told reply rides along, so a wordless turn never re-tells it
+    const mark = row.live ? `${rowMark(row)}${replyPart(prev) ?? ""}` : rowMark(row);
     marks.set(row.threadId, mark);
-    if (before.get(row.threadId) === mark) {
+    if (sameMark(prev, mark)) {
       if (rowOpen(row)) open++;
       continue;
     }
-    const got = watchEvent(row.threadId, row, { asking: row.asking, resetsAt: row.resetsAt, machine: x.machine });
+    const replyTold = !!replyPart(mark) && replyPart(prev) === replyPart(mark);
+    const got = watchEvent(row.threadId, row, { asking: row.asking, resetsAt: row.resetsAt, machine: x.machine, replyTold });
     const ev = got ? { threadId: row.threadId, ...got } : null;
     if (rowWaitsOnPerson(row)) {
       open++;
@@ -278,8 +295,10 @@ export function fleetStep(rows: FleetRow[], before: Map<string, string>, x: { ma
     }
     // waiting for its plan: one line, and the batch still waits on it (it goes on by itself)
     if (rowWaitsForPlan(row)) { open++; if (ev) events.push(ev); continue; }
-    if (rowOpen(row)) { open++; continue; }
-    if (ev) { events.push(ev); if (ev.kind === "asks") answers++; }
+    const going = rowOpen(row);
+    if (going) open++;
+    // a decision is an answer even with background work going
+    if (ev && (!going || ev.kind === "asks")) { events.push(ev); if (ev.kind === "asks") answers++; }
   }
   if (x.complete !== false) {
     for (const [id, mark] of before) {
