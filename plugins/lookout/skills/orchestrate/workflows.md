@@ -71,7 +71,9 @@ conversation, or one an earlier launch parked), `fresh: true` (never reuse a res
   To carry on a parked or finished agent's conversation from an edited program, `continue: "<its label>"` reaches the
   newest earlier launch's agent with that label. Before resuming with an edited program, call it once with
   `dryRun: true`: it launches nothing and lists each call's fate (reused, rerun, running, continues, new, refused) and
-  the agents it would park or stop.
+  the agents it would park or stop. Without `resume`, `dryRun: true` only checks that a new program parses (its name,
+  phases and `agent()` call sites). A parse refusal shows the line with a caret under the column; a markdown backtick
+  inside a template-literal brief ends the template: write `` \` `` or use other quotes.
 
 ## Picking models
 
