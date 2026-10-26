@@ -19,7 +19,7 @@ Most scripts run unchanged: pass the file's absolute path. Change only these:
 | `budget.total`, `budget.remaining()` | `budget` is `{agents: {cap, used, remaining}, tokens}` |
 | `Promise.race`, `Promise.any` | refused at launch; rewrite |
 | about 10 agents at once | `meta.concurrency`, default 8, at most 32: declare it for a wider fan-out |
-| 1000 agents per run | 24 without an approval (below) by default (Agents without asking in Settings › Chat › Subagents), the whole 1000 when the user chose Unlimited; declare `meta.agents` for a bigger run |
+| 1000 agents per run | the whole 1000 without an approval by default; when the user set Agents without asking (Settings › Chat › Subagents), that many, and a run declaring more in `meta.agents` waits for an approval (below) |
 | no agent timeout | none by default; `timeout` (minutes) sets one: the agent is told to wrap up and gets up to 5 more minutes before it is cut |
 | subagents read your user-level CLAUDE.md | Lookout agents read the workspace's AGENTS.md, CLAUDE.md, `.lookout/rules`, `.cursor/rules` only: put user-level rules in the brief |
 
@@ -56,8 +56,8 @@ conversation, or one an earlier launch parked), `fresh: true` (never reuse a res
 
 - `asks` on the run (and `asking` on the host chat's lane): a program's `ask()`, or an approval. Answer with
   `lookout_answer_workflow {runId, option, value}`, relaying the user's answer. A new run declaring more agents than
-  the chat's allowance (24 by default, Agents without asking in Settings › Chat › Subagents; no limit when the user chose
-  Unlimited) waits for `run` or `raise`; a run that reaches its agents cap waits for a raise
+  the chat's allowance (no limit by default; Agents without asking in Settings › Chat › Subagents, when the user set
+  one) waits for `run` or `raise`; a run that reaches its agents cap waits for a raise
   or `end`. Approve only what the user asked for.
 - An agent whose plan is spent parks and goes on at the reset (or on the next model of its list). Leave it.
 - Lookout restarting cuts the run; its boot relaunches it: finished agents are reused and cut ones continue their own
