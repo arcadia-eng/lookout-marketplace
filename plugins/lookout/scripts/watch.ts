@@ -34,7 +34,7 @@ import { CLIENT_HEADER, HOLD_HEADER, localGet, machineBase, sessionHeaders } fro
 import {
   deadlineLine, decodeFleetCursor, editFollows, fleetDeadline, fleetGoneEvents, fleetPageSettled, fleetStep, fleetSummary, fleetSummaryRows,
   followDeadline, followsLabel, followsOf, offPageAnswerEvents, offPageEvents, offPageMarks, offPageNeedsDetail, primeNews, rowMark,
-  runDeadline, runStep, rowWaitsForPlan, sameMark, takeSseEvents, unseen, WATCH_MAX_MS, watchLine,
+  runDeadline, runStep, rowSettledOnOwnWork, rowWaitsForPlan, sameMark, takeSseEvents, unseen, WATCH_MAX_MS, watchLine,
   type FleetRow, type Follows, type LaneSnap, type RunSnap, type WatchEvent,
 } from "../src/watch.js";
 
@@ -84,6 +84,8 @@ function snapOf(row: Record<string, unknown>): LaneSnap | null {
   const parked = parkedOf(row.parked);
   const openTodos = openTodosOf(row.openTodos);
   const landed = landedOf(row.landed);
+  const shells = shellsOf(row.shells);
+  const watches = watchesOf(row.watches);
   return {
     state: row.state,
     live: row.live === true,
@@ -95,8 +97,8 @@ function snapOf(row: Record<string, unknown>): LaneSnap | null {
     ...(typeof reply?.seq === "number" ? { replySeq: reply.seq } : {}),
     ...(typeof row.lastStopReason === "string" ? { lastStopReason: row.lastStopReason } : {}),
     ...(openTodos ? { openTodos } : {}),
-    ...(Array.isArray(row.shells) && row.shells.length ? { shells: row.shells } : {}),
-    ...(Array.isArray(row.watches) && row.watches.length ? { watches: row.watches } : {}),
+    ...(shells ? { shells } : {}),
+    ...(watches ? { watches } : {}),
     ...(parked ? { parked } : {}),
     ...(landed ? { landed } : {}),
     ...(typeof row.lane === "string" && row.lane ? { lane: row.lane } : {}),
@@ -125,6 +127,30 @@ function parkedOf(v: unknown): LaneSnap["parked"] | undefined {
   if (!v || typeof v !== "object") return undefined;
   const p = v as { until?: unknown; model?: unknown };
   return { ...(typeof p.until === "number" ? { until: p.until } : {}), ...(typeof p.model === "string" ? { model: p.model } : {}) };
+}
+
+function shellsOf(v: unknown): LaneSnap["shells"] {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.flatMap(s => {
+    if (!s || typeof s !== "object") return [];
+    const o = s as { id?: unknown; command?: unknown };
+    return [{ ...(typeof o.id === "number" || typeof o.id === "string" ? { id: o.id } : {}), ...(typeof o.command === "string" ? { command: o.command } : {}) }];
+  });
+  return out.length ? out : undefined;
+}
+
+function watchesOf(v: unknown): LaneSnap["watches"] {
+  if (!Array.isArray(v)) return undefined;
+  const out = v.flatMap(s => {
+    if (!s || typeof s !== "object") return [];
+    const o = s as { id?: unknown; title?: unknown; until?: unknown };
+    return [{
+      ...(typeof o.id === "number" || typeof o.id === "string" ? { id: o.id } : {}),
+      ...(typeof o.title === "string" ? { title: o.title } : {}),
+      ...(typeof o.until === "number" ? { until: o.until } : {}),
+    }];
+  });
+  return out.length ? out : undefined;
 }
 
 /** A lane's `openTodos` (the open count and the turn's last line), narrowed. */
@@ -923,7 +949,7 @@ else {
 
   const first = laneOf(await localGet(base, `/api/lanes?ids=${encodeURIComponent(thread)}`, READ_SLACK_MS), thread);
   // a chat waiting for its plan is told once and still watched: it goes on by itself
-  if (first && rowWaitsForPlan(first)) emitUnseen(watchLine(thread, first));
+  if (first && (rowWaitsForPlan(first) || rowSettledOnOwnWork(first))) emitUnseen(watchLine(thread, first));
   else if (emitUnseen(watchLine(thread, first))) process.exit(0);
 
   const ctrl = new AbortController();
@@ -956,7 +982,7 @@ else {
         try { parsed = JSON.parse(ev.data) as { kind?: string; live?: boolean }; } catch { continue; }
         if (parsed?.kind !== "live" || parsed.live !== false) continue;
         const lane = laneOf(await localGet(base, `/api/lanes?ids=${encodeURIComponent(thread)}`, READ_SLACK_MS), thread);
-        if (lane && rowWaitsForPlan(lane)) { emitUnseen(watchLine(thread, lane)); continue; }
+        if (lane && (rowWaitsForPlan(lane) || rowSettledOnOwnWork(lane))) { emitUnseen(watchLine(thread, lane)); continue; }
         if (emitUnseen(watchLine(thread, lane))) { settled = true; break; }
       }
       if (settled) break;

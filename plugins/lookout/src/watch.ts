@@ -39,8 +39,8 @@ export interface LaneSnap {
   /** The lane's `openTodos`: its last turn ended with open todos while nothing of its own ran. */
   openTodos?: { count: number; lastLine: string };
   /** Its own background commands and watches still running (the lane's `shells`/`watches` rows). */
-  shells?: readonly unknown[];
-  watches?: readonly unknown[];
+  shells?: readonly { id?: number | string; command?: string }[];
+  watches?: readonly { id?: number | string; title?: string; until?: number }[];
   /** State parked: the model whose plan it waits for, and the reset (the lane's `parked`). */
   parked?: { until?: number; model?: string };
   /** The lane's `lastReply.truncated`: `lastReply` is the head and tail excerpt, a read by id has the whole text. */
@@ -67,6 +67,8 @@ const SETTLED = new Set<string>(SETTLED_ORDER);
 const OPEN_TODOS = "open-todos";
 const laneOpenTodos = (l: Pick<LaneSnap, "state" | "openTodos" | "shells" | "watches">): LaneSnap["openTodos"] =>
   l.state === "done" && !l.shells?.length && !l.watches?.length ? l.openTodos : undefined;
+export const rowSettledOnOwnWork = (l: LaneSnap): boolean =>
+  l.state === "done" && !l.live && (l.shells?.length ?? 0) + (l.watches?.length ?? 0) > 0;
 const openTodosLine = (n: number): string => `stopped with ${n} open ${n === 1 ? "todo" : "todos"}, nothing running`;
 /** endedHow (src/server/lanes.ts) on the stop reasons that settle a lane `incomplete`. */
 const incompleteHow = (stop: string | undefined): string => {
@@ -152,10 +154,31 @@ function gistTail(reply?: string): string {
 
 /** What a watch line says, for a reader that routes on it (the channel's meta `state`). */
 export type WatchKind =
-  | "parked" | "needs_input" | "workflow_asks" | "quota" | "open-todos" | "incomplete" | "asks" | "landed"
+  | "parked" | "needs_input" | "workflow_asks" | "quota" | "open-todos" | "incomplete" | "asks" | "landed" | "settled"
   | "done" | "failed" | "stopped" | "interrupted" | "gone" | (string & {});
 
 export interface WatchEvent { threadId: string; line: string; kind: WatchKind; machine?: string; lane?: string }
+
+const ownCut = (s: string): string => { const t = flat(s); return t.length > 80 ? `${t.slice(0, 79)}…` : t; };
+const ownParen = (bits: string[]): string => (bits.length ? ` (${bits.join(", ")})` : "");
+
+function ownWorkLine(lane: LaneSnap): string {
+  const shells = lane.shells ?? [];
+  const watches = lane.watches ?? [];
+  const parts: string[] = [];
+  if (watches.length === 1) {
+    const w = watches[0]!;
+    parts.push(`its watch${w.title ? ` "${ownCut(w.title)}"` : ""}${ownParen([...(w.id !== undefined ? [`shell ${w.id}`] : []), ...(w.until ? [`until ${isoMinute(w.until)}`] : [])])}`);
+  } else if (watches.length > 1) {
+    const until = Math.min(...watches.map(w => w.until ?? Infinity));
+    parts.push(`${watches.length} watches${Number.isFinite(until) ? ` (the earliest until ${isoMinute(until)})` : ""}`);
+  }
+  if (shells.length === 1) {
+    const s = shells[0]!;
+    parts.push(`its command${s.command ? ` "${ownCut(s.command)}"` : ""}${ownParen(s.id !== undefined ? [`shell ${s.id}`] : [])}`);
+  } else if (shells.length > 1) parts.push(`${shells.length} commands`);
+  return `settled, ${parts.join(" and ")} ${shells.length + watches.length === 1 ? "wakes" : "wake"} it`;
+}
 
 /**
  * A line for Monitor, or null to keep waiting. `needs_input` and a workflow
@@ -197,6 +220,7 @@ export function watchEvent(threadId: string, lane: LaneSnap | null, x: WatchExtr
   if (todos) return say(OPEN_TODOS, `${openTodosLine(todos.count)}${gistTail(todos.lastLine || lane.lastReply)}`);
   if (lane.state === "incomplete") return say("incomplete", `incomplete: ${incompleteHow(lane.lastStopReason)}${gistTail(lane.lastReply)}`);
   if (lane.state === "done" && lane.landed) return say("landed", `landed #${lane.landed.pr}`);
+  if (rowSettledOnOwnWork(lane)) return say("settled", ownWorkLine(lane));
   return say(lane.state, `${lane.state}${gistTail(lane.lastReply)}`);
 }
 
@@ -222,15 +246,21 @@ export const rowWaitsOnPerson = (row: FleetRow): boolean => row.state === "needs
 export function rowOpen(row: FleetRow): boolean {
   if (rowWaitsOnPerson(row)) return true;
   if (row.working || row.live || IN_FLIGHT.has(row.state)) return true;
+  if (rowSettledOnOwnWork(row)) return true;
   if (row.state === "interrupted" && (row.crashResume === "pending" || row.crashResume === "resumed")) return true;
   return !SETTLED.has(row.state);
 }
+
+const ownMark = (row: FleetRow): string => {
+  const ids = [...(row.shells ?? []).map((s, i) => `s${s.id ?? i}`), ...(row.watches ?? []).map((w, i) => `w${w.id ?? i}`)];
+  return ids.length ? `+own${ids.join(".")}` : "";
+};
 
 /** The mark a fleet read keeps of a chat: its state, a workflow ask, an open-todos settle, a landing, a crash resume, the reply. */
 export function rowMark(row: FleetRow): string {
   const landed = row.state === "done" && row.landed ? `+landed${row.landed.pr}` : "";
   const reply = !row.live && row.replySeq !== undefined ? `+r${row.replySeq}` : "";
-  return `${row.state}${(row.asking ?? 0) > 0 ? "+asking" : ""}${laneOpenTodos(row) ? "+todos" : ""}${landed}${row.crashResume ? `~${row.crashResume}` : ""}${reply}`;
+  return `${row.state}${(row.asking ?? 0) > 0 ? "+asking" : ""}${laneOpenTodos(row) ? "+todos" : ""}${landed}${ownMark(row)}${row.crashResume ? `~${row.crashResume}` : ""}${reply}`;
 }
 
 const REPLY_PART = /\+r\d+$/;
@@ -245,7 +275,7 @@ export function sameMark(before: string | undefined, mark: string): boolean {
 /** A mark back to whether the batch still waits on that chat. */
 export function markOpen(mark: string): boolean {
   const state = mark.split(/[+~]/)[0] ?? mark;
-  if (state === "needs_input" || mark.includes("+asking")) return true;
+  if (state === "needs_input" || mark.includes("+asking") || mark.includes("+own")) return true;
   if (IN_FLIGHT.has(state)) return true;
   if (state === "interrupted" && (mark.includes("~pending") || mark.includes("~resumed"))) return true;
   return !SETTLED.has(state);
@@ -295,6 +325,7 @@ export function fleetStep(rows: FleetRow[], before: Map<string, string>, x: { ma
     }
     // waiting for its plan: one line, and the batch still waits on it (it goes on by itself)
     if (rowWaitsForPlan(row)) { open++; if (ev) events.push(ev); continue; }
+    if (rowSettledOnOwnWork(row)) { open++; if (ev) { events.push(ev); if (ev.kind === "asks") answers++; } continue; }
     const going = rowOpen(row);
     if (going) open++;
     // a decision is an answer even with background work going
@@ -332,7 +363,7 @@ const markState = (mark: string): string => mark.split(/[+~]/)[0] ?? mark;
 export function fleetDeadline(rows: FleetRow[], moreMarks?: Iterable<string>): string {
   const counts = new Map<string, number>();
   const add = (state: string) => counts.set(state, (counts.get(state) ?? 0) + 1);
-  for (const r of rows) if (rowOpen(r) || rowWaitsForPlan(r)) add(r.state);
+  for (const r of rows) if (rowOpen(r) || rowWaitsForPlan(r)) add(rowSettledOnOwnWork(r) ? "waiting on own work" : r.state);
   if (moreMarks) for (const mark of moreMarks) {
     const state = markState(mark);
     if (mark.includes("+asking")) add("asking");
@@ -582,7 +613,7 @@ export function runDeadline(snap: RunSnap, machine?: string): string {
  */
 export function followDeadline(rows: FleetRow[], filters: string): string {
   const counts = new Map<string, number>();
-  for (const r of rows) if (rowOpen(r) || rowWaitsForPlan(r)) counts.set(r.state, (counts.get(r.state) ?? 0) + 1);
+  for (const r of rows) if (rowOpen(r) || rowWaitsForPlan(r)) { const s = rowSettledOnOwnWork(r) ? "waiting on own work" : r.state; counts.set(s, (counts.get(s) ?? 0) + 1); }
   const going = [...counts.entries()].map(([s, n]) => `${n} ${s}`).join(", ");
   return `[lookout] follow (${filters}) reached Monitor's 30 minute cap${going ? ` with ${going}` : ""}: arm the same command again (nothing it told is told twice), or add these filters to the plugin's monitor with --follow --add, which needs no arming.`;
 }
