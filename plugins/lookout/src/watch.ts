@@ -1,6 +1,5 @@
 // The Monitor watcher: one line when a Lookout chat settles, asks or needs a
-// person, nothing while it works. SSE frames are split here so the script can
-// be tested without a server; the fleet and run steps turn a snapshot plus the
+// person, nothing while it works. The fleet and run steps turn a snapshot plus the
 // previous read's marks into a batch's lines, never one event twice across a
 // cursor. A page cut at the lanes limit is not the batch.
 
@@ -50,6 +49,7 @@ export interface LaneSnap {
   /** The lane key and the chat's last activity (the lane's `lane` and `updatedAt`). */
   lane?: string;
   updatedAt?: number;
+  asking?: { id: string; question: string; options?: string[]; to?: { kind: string; name: string } };
 }
 
 /** States that still need the watcher to stay open. */
@@ -80,8 +80,9 @@ const incompleteHow = (stop: string | undefined): string => {
 };
 
 export interface WatchExtras {
-  /** The chat's workflow runs waiting on a person (the lane's `asking`). */
-  asking?: number;
+  /** The chat's workflow runs waiting on a person (the lane's `runsAsking`). */
+  runsAsking?: number;
+  askTold?: boolean;
   /** A crash resume that goes on by itself (the lane's `crashResume`). */
   crashResume?: string;
   /** When the spent plan resets (the lane error's `resetsAt`). */
@@ -203,7 +204,12 @@ export function watchEvent(threadId: string, lane: LaneSnap | null, x: WatchExtr
     if (lane.handoff) return say("needs_input", `needs input: take over the Browser${q ? `: ${q}` : ""}`);
     return say("needs_input", q ? `needs input: ${q}` : "needs input");
   }
-  if ((x.asking ?? 0) > 0) return say("workflow_asks", `workflow asks (${x.asking} open)`);
+  if ((x.runsAsking ?? 0) > 0) return say("workflow_asks", `workflow asks (${x.runsAsking} open)`);
+  const ask = lane.asking && lane.asking.to?.kind !== "agent" ? lane.asking : undefined;
+  if (ask && (lane.live || lane.working) && !x.askTold) {
+    const options = ask.options?.length ? ` (${ask.options.map((o, i) => `${i + 1}. ${flat(o)}`).join(" ")})` : "";
+    return say("asks", `asks while it works: ${sentencesWithin(ask.question, GIST_CLOSING)}${options}; answer with lookout_steer`);
+  }
   if (lane.live) return null;
   const decision = !x.replyTold && (lane.state === "done" || OPEN.has(lane.state)) && !laneOpenTodos(lane)
     ? replyGist(lane.lastReply)?.decision : undefined;
@@ -231,7 +237,7 @@ export function watchLine(threadId: string, lane: LaneSnap | null, x: WatchExtra
 /** A chat as the fleet step keeps it: a lane plus what hides inside its state. */
 export interface FleetRow extends LaneSnap {
   threadId: string;
-  asking?: number;
+  runsAsking?: number;
   crashResume?: string;
   resetsAt?: number;
 }
@@ -240,7 +246,7 @@ export interface FleetRow extends LaneSnap {
 export const rowWaitsForPlan = (row: LaneSnap): boolean => row.state === "parked" && !row.live;
 
 /** A chat blocked on a person: its own question, or a workflow run of it asking. */
-export const rowWaitsOnPerson = (row: FleetRow): boolean => row.state === "needs_input" || (row.asking ?? 0) > 0;
+export const rowWaitsOnPerson = (row: FleetRow): boolean => row.state === "needs_input" || (row.runsAsking ?? 0) > 0;
 
 /** A chat the batch still waits on: in flight, or blocked on a person (not settled). */
 export function rowOpen(row: FleetRow): boolean {
@@ -260,7 +266,7 @@ const ownMark = (row: FleetRow): string => {
 export function rowMark(row: FleetRow): string {
   const landed = row.state === "done" && row.landed ? `+landed${row.landed.pr}` : "";
   const reply = !row.live && row.replySeq !== undefined ? `+r${row.replySeq}` : "";
-  return `${row.state}${(row.asking ?? 0) > 0 ? "+asking" : ""}${laneOpenTodos(row) ? "+todos" : ""}${landed}${ownMark(row)}${row.crashResume ? `~${row.crashResume}` : ""}${reply}`;
+  return `${row.state}${(row.runsAsking ?? 0) > 0 ? "+asking" : ""}${row.asking ? `?${row.asking.id}` : ""}${laneOpenTodos(row) ? "+todos" : ""}${landed}${ownMark(row)}${row.crashResume ? `~${row.crashResume}` : ""}${reply}`;
 }
 
 const REPLY_PART = /\+r\d+$/;
@@ -274,7 +280,7 @@ export function sameMark(before: string | undefined, mark: string): boolean {
 
 /** A mark back to whether the batch still waits on that chat. */
 export function markOpen(mark: string): boolean {
-  const state = mark.split(/[+~]/)[0] ?? mark;
+  const state = markState(mark);
   if (state === "needs_input" || mark.includes("+asking") || mark.includes("+own")) return true;
   if (IN_FLIGHT.has(state)) return true;
   if (state === "interrupted" && (mark.includes("~pending") || mark.includes("~resumed"))) return true;
@@ -316,7 +322,8 @@ export function fleetStep(rows: FleetRow[], before: Map<string, string>, x: { ma
       continue;
     }
     const replyTold = !!replyPart(mark) && replyPart(prev) === replyPart(mark);
-    const got = watchEvent(row.threadId, row, { asking: row.asking, resetsAt: row.resetsAt, machine: x.machine, replyTold });
+    const askTold = !!row.asking && !!prev?.includes(`?${row.asking.id}`);
+    const got = watchEvent(row.threadId, row, { runsAsking: row.runsAsking, askTold, resetsAt: row.resetsAt, machine: x.machine, replyTold });
     const ev = got ? { threadId: row.threadId, ...got } : null;
     if (rowWaitsOnPerson(row)) {
       open++;
@@ -355,7 +362,7 @@ export function fleetSummary(rows: FleetRow[], machines = 1): string {
   return `[lookout] fleet settled${where}: ${parts.join(", ")}`;
 }
 
-const markState = (mark: string): string => mark.split(/[+~]/)[0] ?? mark;
+const markState = (mark: string): string => mark.split(/[+~?]/)[0] ?? mark;
 
 /** The re-arm line at the deadline: what is still going, so the lead knows what it re-arms for.
  *  `moreMarks` are chats a cut page omitted (the lanes cursor's marks): a queued, asking, or parked

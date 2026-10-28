@@ -103,7 +103,17 @@ function snapOf(row: Record<string, unknown>): LaneSnap | null {
     ...(landed ? { landed } : {}),
     ...(typeof row.lane === "string" && row.lane ? { lane: row.lane } : {}),
     ...(typeof row.updatedAt === "number" ? { updatedAt: row.updatedAt } : {}),
+    ...askingOf(row.asking),
   };
+}
+
+function askingOf(v: unknown): Pick<LaneSnap, "asking"> {
+  if (!v || typeof v !== "object") return {};
+  const a = v as { id?: unknown; question?: unknown; options?: unknown; to?: { kind?: unknown; name?: unknown } };
+  if (typeof a.id !== "string" || typeof a.question !== "string") return {};
+  const options = Array.isArray(a.options) ? a.options.filter((o): o is string => typeof o === "string") : [];
+  const to = a.to && typeof a.to.kind === "string" && typeof a.to.name === "string" ? { kind: a.to.kind, name: a.to.name } : undefined;
+  return { asking: { id: a.id, question: a.question, ...(options.length ? { options } : {}), ...(to ? { to } : {}) } };
 }
 
 function laneOf(body: unknown, threadId: string): LaneSnap | null {
@@ -233,7 +243,7 @@ function fleetRowsOf(body: unknown): { rows: FleetRow[]; cursor?: string; nextPa
     rows.push({
       ...snap,
       threadId: r.threadId,
-      ...(typeof r.asking === "number" && r.asking > 0 ? { asking: r.asking } : {}),
+      ...(typeof r.runsAsking === "number" && r.runsAsking > 0 ? { runsAsking: r.runsAsking } : {}),
       ...(typeof r.crashResume === "string" ? { crashResume: r.crashResume } : {}),
       ...(typeof resetsAt === "number" ? { resetsAt } : {}),
     });
@@ -524,7 +534,7 @@ async function hydrate(api: string, parsed: Parsed, f: Filter) {
   const need = offPageNeedsDetail(off0);
   const rank = (id: string) => {
     const mark = off0.get(id) ?? "";
-    const state = mark.split(/[+~]/)[0] ?? mark;
+    const state = mark.split(/[+~?]/)[0] ?? mark;
     return state === "needs_input" || mark.includes("+asking") || state === "quota" ? 0 : 1;
   };
   const ids = [...need].sort((a, b) => rank(a) - rank(b)).slice(0, DETAIL_CAP);
@@ -656,7 +666,7 @@ async function watchSources(spec: Spec = cliSpec, stop?: AbortSignal): Promise<v
     r.marks = new Map(out.marks);
     if (hydrated.off && hydrated.cursor) {
       for (const [id, mark] of hydrated.off) {
-        const state = mark.split(/[+~]/)[0] ?? mark;
+        const state = mark.split(/[+~?]/)[0] ?? mark;
         // the cursor's `interrupted` does not say whether a resume is still pending; keep a mark the detail
         // read already made, and don't record the bare one or the next detail read would stay silent
         if (state === "interrupted") {
@@ -978,9 +988,11 @@ else {
       buf = taken.rest;
       let settled = false;
       for (const ev of taken.events) {
-        let parsed: { kind?: string; live?: boolean } | null = null;
-        try { parsed = JSON.parse(ev.data) as { kind?: string; live?: boolean }; } catch { continue; }
-        if (parsed?.kind !== "live" || parsed.live !== false) continue;
+        type Ev = { kind?: string; live?: boolean; item?: { type?: string; name?: string; status?: string } };
+        let parsed: Ev | null = null;
+        try { parsed = JSON.parse(ev.data) as Ev; } catch { continue; }
+        const asked = parsed?.kind === "item" && parsed.item?.type === "result" && parsed.item.name === "AskParent" && parsed.item.status === "ok";
+        if (!asked && (parsed?.kind !== "live" || parsed.live !== false)) continue;
         const lane = laneOf(await localGet(base, `/api/lanes?ids=${encodeURIComponent(thread)}`, READ_SLACK_MS), thread);
         if (lane && (rowWaitsForPlan(lane) || rowSettledOnOwnWork(lane))) { emitUnseen(watchLine(thread, lane)); continue; }
         if (emitUnseen(watchLine(thread, lane))) { settled = true; break; }

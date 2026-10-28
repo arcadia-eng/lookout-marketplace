@@ -54,7 +54,7 @@ conversation, or one an earlier launch parked), `fresh: true` (never reuse a res
 
 ## While it runs
 
-- `asks` on the run (and `asking` on the host chat's lane): a program's `ask()`, or an approval. Answer with
+- `asks` on the run (and `runsAsking` on the host chat's lane): a program's `ask()`, or an approval. Answer with
   `lookout_answer_workflow {runId, option, value}`, relaying the user's answer. A new run declaring more agents than
   the chat's allowance (no limit by default; Agents without asking in Settings › Chat › Subagents, when the user set
   one) waits for `run` or `raise`; a run that reaches its agents cap waits for a raise

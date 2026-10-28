@@ -49,6 +49,8 @@ Monitor, `timeout_ms` 1740000, `persistent` false (or run it as a background com
 - One chat only: `--thread <id>`.
 - The watcher needs the local app. On the hosted MCP with no local app, block on `lookout_fleet {waitSeconds}` instead.
 
+A chat you started can ask you while it keeps working (its AskParent): `asks while it works: <question> (1. … 2. …); answer with lookout_steer`. The watcher exits on it as on a question. Answer it at once with `lookout_steer {threadId, text}`: the chat reads it at its next step, and the result's `answers` names the question it closed. Don't wait for its turn to end, and re-arm afterwards. Until you answer, the question stays on the lane as `asking` (also past its turn's end) and the chat can ask nothing else; a question it put to a Lookout agent leading it is that agent's, and prints no line.
+
 A settle line carries the reply's first line and its closing paragraph (`done: <first line> … <closing paragraph>`), so a `queued <id>` or a conclusion at the end of a long report reaches you. A turn that ends on a paragraph starting "Decision for the lead:" is `done, asks: <that paragraph>` (`turn done (background), asks:` while its workers go on, `done, landed #<pr>, asks:` when a landing came after it), and the watcher exits on it as on a question: answer it with `lookout_steer`. A done whose newest turn was its landing notice, its reply already told, is `landed #<pr>`, not a second done.
 
 ## Following everything you lead: the plugin's monitor
@@ -73,7 +75,7 @@ The same lines then arrive as `<channel source="lookout" thread_id=… state=…
 
 ## Work orders that leave a decision
 
-End every work order with: "Put a decision you need from me in a closing paragraph that starts `Decision for the lead:`; use AskQuestion only when you cannot go on without the answer." The watcher turns that paragraph into an `asks` line, and the chat finishes its turn instead of blocking on a question nobody may be watching.
+End every work order with: "Ask me with AskParent when a question comes up whose answer changes what you deliver, and keep going; small choices are yours to make and mention in your report. Put a decision you still need when you finish in a closing paragraph that starts `Decision for the lead:`." The watcher turns the question into an `asks while it works` line and the paragraph into an `asks` line, and the chat finishes its turn instead of blocking on a question nobody may be watching. AskQuestion stays its form for a decision nothing can go on without.
 
 ## Workflow runs
 
@@ -102,7 +104,7 @@ Project folders: `lookout_configure_project {projectId, folders: [primary, ...ex
 
 ## Agents
 
-`lookout_configure_agent` sets up one of the user's named agents (not a chat): `agent` by id or exact name, and any of `name`, `description`, `instructions` (they replace `AGENTS.md` in its home), `section` (id or exact name, or null), `projects` (project ids, first is its default), `fallbacks` (up to 4 `{model, effort}`, model ids and levels from `lookout_models`), `showWork`. Only the fields you pass change. Moving into a Lookout agent means writing the instructions it lives by, binding its projects, and setting its fallbacks in one call.
+`lookout_configure_agent` sets up one of the user's named agents (not a chat): `agent` by id or exact name, and any of `name`, `description`, `instructions` (they replace `AGENTS.md` in its home), `section` (id, or a path such as `Northwind/Legal` whose missing sections are made, or null), `projects` (project ids, first is its default), `fallbacks` (up to 4 `{model, effort}`, model ids and levels from `lookout_models`), `showWork`. Only the fields you pass change. Moving into a Lookout agent means writing the instructions it lives by, binding its projects, and setting its fallbacks in one call.
 
 - It needs the user's per-client permission on that machine, off by default. A refusal is `grant_needed`, and `setting` names the place (`Settings > App access > Apps > <client> > Configure agents`). Ask the user to allow it there, then call again.
 - Limits, allowed models, pause, lock and memory switches are the user's in the app: the tool cannot set them, and the server refuses them to terminal and MCP callers alike.
