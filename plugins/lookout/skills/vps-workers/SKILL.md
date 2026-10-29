@@ -44,10 +44,10 @@ A machine with `autoUpdate.on` installs each new signed release by itself within
 
 ## 4. Integrate
 
-- `lookout_push_worktree {threadId}` pushes the branch to the project's remote with the VPS's credential. Then on this Mac: `git fetch origin <branch>` and merge, or open `compareUrl`.
-- The lookout repo: after `lookout_push_worktree`, run `bun scripts/ship.ts --branch <branch>` from any checkout on this Mac (the lead's or a Mac-side chat's). It fetches the branch, checks it in a throwaway worktree and queues it through the merge queue, so the work lands without the VPS again. One line and a nonzero exit when origin has no such branch, the tip is already on main, or the check is red, and exit 2 when it does not merge into main (merge origin/main into the branch, push, run it again); `bun scripts/ship.ts --status <id>` reads the outcome.
-- `lookout_merge_worktree {threadId}` merges it into the VPS checkout instead, to stack several chats there. A `merge_conflict` leaves the checkout unchanged: steer that chat to `git merge main`, resolve and commit, then merge again. No tool pushes the checkout itself: push the last merged chat's branch (it carries the others). A later clone result's `ahead` counts what was merged there and not pushed.
-- A dirty worktree: steer the chat to commit first.
+- `lookout_push_worktree {threadId}` lands the chat's work on the remote's tip of main and pushes it, never forced, with the VPS's credential. Then on this Mac: `git fetch origin`.
+- The lookout repo, whose main moves only through `ship.ts`, is never landed with these tools: steer the chat to push its branch (`git push -u origin HEAD` in its worktree), then run `bun scripts/ship.ts --branch <branch>` from any checkout on this Mac (the lead's or a Mac-side chat's). It fetches the branch, checks it in a throwaway worktree and queues it through the merge queue, so the work lands without the VPS again. One line and a nonzero exit when origin has no such branch, the tip is already on main, or the check is red, and exit 2 when it does not merge into main (merge origin/main into the branch, push, run it again); `bun scripts/ship.ts --status <id>` reads the outcome.
+- `lookout_merge_worktree {threadId}` lands it in the VPS checkout instead, to stack several chats there; the last one with `push: true` pushes them all. A `needs_repair` leaves the checkout unchanged and tells that chat, with the hunks: it merges main in and resolves; land it again once it says so. A later clone result's `ahead` counts what landed there and was not pushed.
+- A worktree's uncommitted work is committed by the landing itself.
 
 ## 5. Clean up
 
